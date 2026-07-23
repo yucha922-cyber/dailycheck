@@ -1,0 +1,7 @@
+# clasp（実際の認証・スクリプトIDはコミットしない）
+.clasp.json
+.clasprc.json
+
+# OS / editor
+.DS_Store
+node_modules/

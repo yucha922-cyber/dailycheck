@@ -1,0 +1,6 @@
+{
+  "_comment": "clasp でコードを流し込む場合の設定例。実際は .clasp.json にリネームして使う。",
+  "_howto": "対象スプレッドシートの Apps Script で『プロジェクトの設定 → スクリプトID』を控え、下の scriptId に貼る。",
+  "scriptId": "ここに各店スプレッドシートのスクリプトIDを入れる",
+  "rootDir": "apps-script"
+}
