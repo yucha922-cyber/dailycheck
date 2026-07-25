@@ -73,11 +73,24 @@ function getMasterTasks_() {
     });
 }
 
-/** その日にチェック対象とすべき業務か（頻度で判定） */
+/** 今日の曜日文字（日/月/火/水/木/金/土） */
+function todayWeekdayChar_() {
+  return WEEKDAY_JP[new Date().getDay()];
+}
+
+/**
+ * その日にチェック対象とすべき業務か（頻度で判定）。
+ * ★「本日の対象（自動）」シートの FILTER 数式と完全に同じルール。
+ *   頻度に「毎日」「毎回」を含む → 常に対象
+ *   頻度に 今日の曜日（例:「月」）を含む → その曜日だけ対象
+ *   複数曜日は「月,木」「月水金」のように書けます。
+ */
 function isScheduledToday_(task /*, date */) {
   if (!task.enabled) return false;
-  // 現状は「毎日」「随時」を日次対象とする。週次などは今後拡張可能。
-  return task.freq === '毎日' || task.freq === '随時';
+  const f = String(task.freq || '');
+  if (!f) return false;
+  if (f.indexOf('毎日') >= 0 || f.indexOf('毎回') >= 0) return true;
+  return f.indexOf(todayWeekdayChar_()) >= 0;
 }
 
 /** 本日スケジュールされる業務一覧 */

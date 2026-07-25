@@ -21,6 +21,13 @@ function buildChecklist_() {
 
   const tasks = getScheduledTasks_();
 
+  // 本日すでに記録済みの完了状態を復元（マスタ編集による再生成でも進捗を維持）
+  const doneMap = {}, timeMap = {};
+  getLogByDate_(todayStr_()).forEach(function (l) {
+    doneMap[l.taskId] = l.done;
+    timeMap[l.taskId] = l.time;
+  });
+
   // --- タイトル・ステータス ---
   sh.getRange(1, 1, 1, CHK_COLS).merge()
     .setValue('📅 ' + todayLabel_() + '　｜　店舗：' + CONFIG.STORE_NAME + '（' + CONFIG.STORE_ID + '）')
@@ -41,7 +48,9 @@ function buildChecklist_() {
 
   // --- データ ---
   const rows = tasks.map(function (t) {
-    return [false, t.id, t.phase, (t.required ? '★' : '　') + t.name, t.min, '', '', t.memo];
+    const done = doneMap[t.id] === true;
+    return [done, t.id, t.phase, (t.required ? '★' : '　') + t.name, t.min,
+            done ? (timeMap[t.id] || '') : '', '', t.memo];
   });
   if (rows.length) {
     sh.getRange(CHK_DATA_START, 1, rows.length, CHK_COLS).setValues(rows);
@@ -87,7 +96,17 @@ function updateChecklistStatus_() {
 function handleEdit_(e) {
   if (!e || !e.range) return;
   const sh = e.range.getSheet();
-  if (sh.getName() !== CONFIG.SHEETS.CHECK) return;
+  const name = sh.getName();
+
+  // 業務マスタを編集したら「本日のチェック」を自動で作り直す。
+  //  → マスタを直すだけで今日のチェックに即反映（全店舗共通の運用）。
+  //  → 既にチェック済みの進捗は日次ログから復元されるので消えません。
+  if (name === CONFIG.SHEETS.MASTER) {
+    buildChecklist_();
+    return;
+  }
+
+  if (name !== CONFIG.SHEETS.CHECK) return;
 
   const row = e.range.getRow();
   const col = e.range.getColumn();

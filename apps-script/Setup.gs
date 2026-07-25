@@ -11,6 +11,7 @@
 /** すべてを初期化してセットアップ */
 function setupAll() {
   setupMasterSheet_();
+  setupAutoSheet_();       // ★関数だけの自動抽出シート
   setupLogSheet_();
   buildChecklist_();       // Checklist.gs
   buildDashboard_();       // Dashboard.gs
@@ -39,6 +40,14 @@ function setupMasterSheet_() {
     sh.getRange(2, 8, rows.length, 1).insertCheckboxes();
   }
 
+  // 頻度列（5列目）に入力候補プルダウンを設定（複数曜日の自由入力も許可）
+  const freqRule = SpreadsheetApp.newDataValidation()
+    .requireValueInList(FREQ_OPTIONS, true)
+    .setAllowInvalid(true)  // 「月,木」等の複数指定も入力できるようにする
+    .setHelpText('毎日 / 毎回 / 曜日（月火水木金土日・複数可 例「月,木」）')
+    .build();
+  sh.getRange(2, 5, 1000, 1).setDataValidation(freqRule);
+
   // 見た目
   sh.getRange(1, 1, 1, header.length)
     .setFontWeight('bold').setBackground('#37474f').setFontColor('#ffffff');
@@ -46,8 +55,63 @@ function setupMasterSheet_() {
   sh.setColumnWidth(1, 55);
   sh.setColumnWidth(2, 70);
   sh.setColumnWidth(3, 160);
+  sh.setColumnWidth(5, 90);
   sh.setColumnWidth(7, 220);
   applyPhaseColors_(sh, 2);
+}
+
+/**
+ * ★「本日の対象（自動）」シート ― 関数だけで業務マスタから自動抽出。
+ *   曜日判定つき FILTER 数式で、今日やるべき業務が自動で並びます。
+ *   （GASは一度書くだけ。以降はマスタを直すだけで全店に反映されます）
+ */
+function setupAutoSheet_() {
+  const sh = getOrCreateSheet_(CONFIG.SHEETS.AUTO);
+  sh.clear();
+  const M = CONFIG.SHEETS.MASTER;
+
+  // 見出し
+  sh.getRange(1, 1, 1, 7).merge()
+    .setValue('📌 本日の対象業務（業務マスタから自動抽出／関数）')
+    .setFontSize(13).setFontWeight('bold')
+    .setBackground('#263238').setFontColor('#ffffff').setVerticalAlignment('middle');
+  sh.setRowHeight(1, 30);
+
+  // 日付・曜日（すべて関数）
+  sh.getRange(2, 1).setValue('日付').setFontWeight('bold');
+  sh.getRange(2, 2).setFormula('=TODAY()').setNumberFormat('yyyy/mm/dd (ddd)');
+  sh.getRange(2, 4).setValue('本日の曜日').setFontWeight('bold');
+  // 今日の曜日文字（日〜土）。この1セルを FILTER が参照します。
+  sh.getRange(2, 5).setFormula('=MID("日月火水木金土", WEEKDAY(TODAY()), 1) & "曜日"');
+
+  // ヘッダー
+  const header = ['ID', '区分', '業務名', '目安(分)', '頻度', '必須', '備考'];
+  sh.getRange(4, 1, 1, header.length).setValues([header])
+    .setFontWeight('bold').setBackground('#37474f').setFontColor('#ffffff');
+  sh.setFrozenRows(4);
+
+  // ★中核の数式：有効=TRUE かつ 頻度が「毎日/毎回/本日の曜日」を含む行だけ抽出
+  //   （並び順は業務マスタの行順＝開店前→営業中→閉店前 をそのまま引き継ぎます）
+  const todayChar = 'MID("日月火水木金土", WEEKDAY(TODAY()), 1)';
+  const formula =
+    "=IFERROR(" +
+      "FILTER('" + M + "'!A2:G, " +
+        "ARRAYFORMULA(" +
+          "('" + M + "'!H2:H=TRUE) * " +
+          "REGEXMATCH('" + M + "'!E2:E & \"\", \"毎日|毎回|\" & " + todayChar + ")" +
+        ")" +
+      "), " +
+      "\"対象業務がありません（業務マスタの頻度/有効を確認）\")";
+  sh.getRange(5, 1).setFormula(formula);
+
+  // 補足
+  sh.getRange(3, 1, 1, 7).merge()
+    .setValue('※ このシートは自動計算です（編集不可）。実際の✓は「' + CONFIG.SHEETS.CHECK + '」で行います。')
+    .setFontColor('#78909c').setFontSize(9);
+
+  sh.setColumnWidth(1, 55);
+  sh.setColumnWidth(3, 170);
+  sh.setColumnWidth(7, 220);
 }
 
 /** 日次ログ（履歴）シートを作成 */
@@ -83,7 +147,7 @@ function applyPhaseColors_(sh, startRow, phaseCol, colorCol) {
 
 /** シートの並び順を整える */
 function reorderSheets_() {
-  const order = [CONFIG.SHEETS.CHECK, CONFIG.SHEETS.DASH, CONFIG.SHEETS.MASTER, CONFIG.SHEETS.LOG];
+  const order = [CONFIG.SHEETS.CHECK, CONFIG.SHEETS.DASH, CONFIG.SHEETS.AUTO, CONFIG.SHEETS.MASTER, CONFIG.SHEETS.LOG];
   const ss = ss_();
   order.forEach(function (name, idx) {
     const sh = ss.getSheetByName(name);
