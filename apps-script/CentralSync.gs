@@ -46,7 +46,7 @@ function pushDailySummaryToCentral_(date) {
   if (last >= 2) {
     const keys = sh.getRange(2, 1, last - 1, 2).getValues();
     for (let i = 0; i < keys.length; i++) {
-      const d = keys[i][0] instanceof Date ? dateStr_(keys[i][0]) : String(keys[i][0]).trim();
+      const d = isDate_(keys[i][0]) ? dateStr_(keys[i][0]) : String(keys[i][0]).trim();
       if (d === String(date) && String(keys[i][1]).trim() === String(c.STORE_ID)) {
         sh.getRange(i + 2, 1, 1, CENTRAL_HEADER.length).setValues([row]);
         return;

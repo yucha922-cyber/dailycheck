@@ -173,7 +173,7 @@ function checkRowsToRecords_(sh) {
       time: timeStr_(r[CHK.TIME - 1]),
       staff: r[CHK.STAFF - 1] || '',
       memo: r[CHK.MEMO - 1] || '',
-      min: Number(r[CHK.MIN - 1]) || 0,
+      min: toMinutes_(r[CHK.MIN - 1]),
     });
   });
   return out;
@@ -286,7 +286,7 @@ function handleEdit_(e) {
       time: timeStr_(vals[i][CHK.TIME - 1]),
       staff: vals[i][CHK.STAFF - 1] || '',
       memo: vals[i][CHK.MEMO - 1] || '',
-      min: Number(vals[i][CHK.MIN - 1]) || 0,
+      min: toMinutes_(vals[i][CHK.MIN - 1]),
     });
   }
   if (records.length) writeHistoryRows_(date, records);

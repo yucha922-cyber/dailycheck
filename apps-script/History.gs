@@ -25,7 +25,7 @@ function setupLogSheet_() {
 
 /** 履歴の日付セルを 'yyyy/MM/dd' 文字列に正規化 */
 function logDateStr_(v) {
-  if (v instanceof Date) return dateStr_(v);
+  if (isDate_(v)) return dateStr_(v);
   return String(v == null ? '' : v).trim();
 }
 
@@ -121,7 +121,7 @@ function getLogByDate_(date) {
         time: timeStr_(g(r, 'time')),
         staff: g(r, 'staff') || '',
         memo: g(r, 'memo') || '',
-        min: Number(g(r, 'min')) || 0,
+        min: toMinutes_(g(r, 'min')),
       };
     });
 }

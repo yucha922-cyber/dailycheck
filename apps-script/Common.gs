@@ -146,6 +146,11 @@ function resolveColumns_(sh, fields, headerRow, createMissing) {
  *  日付・時刻
  * ========================================================== */
 
+/** 日付セルかどうか（Sheetsが返す Date を判定） */
+function isDate_(v) {
+  return Object.prototype.toString.call(v) === '[object Date]' && !isNaN(v.getTime());
+}
+
 function today_()          { return new Date(); }
 function todayStr_()       { return dateStr_(new Date()); }
 function dateStr_(d)       { return Utilities.formatDate(d, TZ, 'yyyy/MM/dd'); }
@@ -156,7 +161,7 @@ function todayLabel_()     { return dateLabel_(new Date()); }
 
 /** 'yyyy/MM/dd' 文字列 → Date（不正なら今日） */
 function parseDate_(s) {
-  if (s instanceof Date) return s;
+  if (isDate_(s)) return s;
   const m = String(s || '').match(/(\d{4})[\/\-年](\d{1,2})[\/\-月](\d{1,2})/);
   if (!m) return new Date();
   return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
@@ -164,8 +169,39 @@ function parseDate_(s) {
 
 /** セルの値を 'HH:mm' 表記に（Date でも文字列でもOK） */
 function timeStr_(v) {
-  if (v instanceof Date) return Utilities.formatDate(v, TZ, 'HH:mm');
+  if (isDate_(v)) return Utilities.formatDate(v, TZ, 'HH:mm');
   return String(v == null ? '' : v).trim();
+}
+
+/**
+ * 目安時間を「分」の数値にする。
+ *  5        → 5
+ *  '5分'     → 5
+ *  '10 min' → 10
+ *  '1時間30分' → 90
+ *  '約5分程度' → 5
+ *  時刻セル（0:05）→ 5
+ *  空欄・読めない値 → 0
+ */
+function toMinutes_(v) {
+  if (v === '' || v === null || v === undefined) return 0;
+  if (typeof v === 'number') return v;
+  if (isDate_(v)) return v.getHours() * 60 + v.getMinutes();
+
+  let s = String(v)
+    .replace(/[０-９]/g, function (c) { return String.fromCharCode(c.charCodeAt(0) - 0xFEE0); })
+    .replace(/[．，,]/g, function (c) { return c === '．' ? '.' : ''; })
+    .replace(/\s/g, '');
+
+  let total = 0, hit = false;
+  const h = s.match(/(\d+(?:\.\d+)?)(?:時間|hours?|hrs?|h)/i);
+  if (h) { total += parseFloat(h[1]) * 60; hit = true; s = s.replace(h[0], ''); }
+  const m = s.match(/(\d+(?:\.\d+)?)(?:分|minutes?|mins?|m)/i);
+  if (m) { total += parseFloat(m[1]); hit = true; }
+  if (hit) return Math.round(total);
+
+  const n = parseFloat(s.replace(/[^\d.\-]/g, ''));
+  return isNaN(n) ? 0 : n;
 }
 
 /** その日が月末か */

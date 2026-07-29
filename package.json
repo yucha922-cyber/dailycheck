@@ -1,6 +1,6 @@
 {
   "name": "dailycheck",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "private": true,
   "description": "サロン日次業務チェック（Googleスプレッドシート + Apps Script）",
   "scripts": {

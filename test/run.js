@@ -190,6 +190,40 @@ ok(!chk3.some(x => x.indexOf('発注') >= 0), '有効=× の業務は出ない')
 ok(chk3.some(x => x.indexOf('施錠') >= 0), '有効が空欄の業務は出る（追加直後に消えない）');
 ok(chk3.some(x => x.indexOf('★') >= 0), '必須=○ が ★ として表示される', chk3);
 
+/* ---------- 6. 目安時間（「5分」などの文字）の取り込み ---------- */
+section('目安時間を分に変換できるか');
+ok(ctx.toMinutes_(5) === 5, '数値 5 → 5');
+ok(ctx.toMinutes_('5分') === 5, '「5分」→ 5');
+ok(ctx.toMinutes_('10分') === 10, '「10分」→ 10');
+ok(ctx.toMinutes_('１５分') === 15, '全角「１５分」→ 15');
+ok(ctx.toMinutes_('1時間30分') === 90, '「1時間30分」→ 90');
+ok(ctx.toMinutes_('約5分程度') === 5, '「約5分程度」→ 5');
+ok(ctx.toMinutes_('10 min') === 10, '「10 min」→ 10');
+ok(ctx.toMinutes_('') === 0, '空欄 → 0');
+ok(ctx.toMinutes_('なし') === 0, '読めない値 → 0');
+ok(ctx.toMinutes_(new Date(2026, 0, 1, 0, 5)) === 5, '時刻セル 0:05 → 5');
+
+section('実シートと同じ列構成（ID/区分/業務名/期限/頻度/担当/目安時間/…）で反映されるか');
+const s4 = [new mock.FakeSheet('各業務マスター'), new mock.FakeSheet('今日のチェック'),
+            new mock.FakeSheet('履歴'), new mock.FakeSheet('設定')];
+mock.SpreadsheetApp._ss = new mock.FakeSpreadsheet(s4);
+ctx.clearCfgCache_();
+s4[0].getRange(1, 1, 1, 13).setValues([[
+  'ID', '区分', '業務名', '期限', '頻度', '担当', '目安時間', '優先度', '自動化', '有効', 'カテゴリ', '必須', '備考']]);
+s4[0].getRange(2, 1, 3, 13).setValues([
+  [1, '開店前', '清掃',       '10:40', '毎日', '担当者', '5分',  '高', '×', true, '', false, ''],
+  [2, '営業中', 'カルテ記入', '施術後', '毎回', '担当者', '15分', '高', '△', true, '', false, ''],
+  [3, '閉店前', '売上確認',   '20:02', '毎日', '院長',   '2分',  '高', '○', true, '', false, ''],
+]);
+ctx.setupAll();
+const chk4 = mock.SpreadsheetApp._ss.getSheetByName('今日のチェック');
+const mins = chk4.getRange(5, 5, 3, 1).getValues().map(r => r[0]);
+ok(JSON.stringify(mins) === JSON.stringify([5, 15, 2]), 'E列(目安)に 5 / 15 / 2 が入る', mins);
+ok(String(s4[0].getRange(2, 7).getValue()) === '5分', 'マスター側の「5分」は書き換えない');
+ok(String(s4[0].getRange(2, 4).getValue()) === '10:40', '期限など未使用の列は触らない');
+const est = ctx.estimateMinutes_();
+ok(est.before === 5 && est.after === 2, '想定作業時間の合計も正しく計算される', est);
+
 console.log('\n----------------------------------------');
 console.log(failures === 0 ? `全 ${checks} 件パス` : `${failures} / ${checks} 件 失敗`);
 process.exit(failures === 0 ? 0 : 1);

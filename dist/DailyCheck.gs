@@ -1,7 +1,7 @@
 /**
  * ============================================================
  *  サロン日次業務チェック  ―  一括貼り付け用ファイル
- *  version 2.0.0
+ *  version 2.0.1
  * ------------------------------------------------------------
  *  このファイル1つを Apps Script エディタの「コード.gs」に
  *  そのまま貼り付ければ導入できます。
@@ -28,7 +28,7 @@
  * ============================================================
  */
 
-const APP_VERSION = '2.0.0';
+const APP_VERSION = '2.0.1';
 
 /**
  * 使用するタブ名。
@@ -70,7 +70,7 @@ const MASTER_FIELDS = [
   { key: 'id',       header: 'ID',       aliases: ['id', '業務id', 'タスクid', 'no', 'no.', '番号', '#'] },
   { key: 'phase',    header: '区分',     aliases: ['区分', 'カテゴリ', 'カテゴリー', 'タイミング', '分類', 'フェーズ', '時間帯'] },
   { key: 'name',     header: '業務名',   aliases: ['業務名', 'タスク名', '業務', '内容', '項目', 'チェック項目', '作業内容', 'タスク'] },
-  { key: 'min',      header: '目安(分)', aliases: ['目安(分)', '目安（分）', '目安分', '目安', '所要時間', '所要(分)', '時間(分)', '分', '想定時間'] },
+  { key: 'min',      header: '目安(分)', aliases: ['目安(分)', '目安（分）', '目安時間', '目安分', '目安', '所要時間', '所要(分)', '所要', '時間(分)', '分', '想定時間', '作業時間'] },
   { key: 'freq',     header: '頻度',     aliases: ['頻度', '実施頻度', 'サイクル', '周期'] },
   { key: 'required', header: '必須',     aliases: ['必須', '必須?', '重要', '必須フラグ'] },
   { key: 'memo',     header: '備考',     aliases: ['備考', 'メモ', '補足', '注意点', '説明'] },
@@ -302,6 +302,11 @@ function resolveColumns_(sh, fields, headerRow, createMissing) {
  *  日付・時刻
  * ========================================================== */
 
+/** 日付セルかどうか（Sheetsが返す Date を判定） */
+function isDate_(v) {
+  return Object.prototype.toString.call(v) === '[object Date]' && !isNaN(v.getTime());
+}
+
 function today_()          { return new Date(); }
 function todayStr_()       { return dateStr_(new Date()); }
 function dateStr_(d)       { return Utilities.formatDate(d, TZ, 'yyyy/MM/dd'); }
@@ -312,7 +317,7 @@ function todayLabel_()     { return dateLabel_(new Date()); }
 
 /** 'yyyy/MM/dd' 文字列 → Date（不正なら今日） */
 function parseDate_(s) {
-  if (s instanceof Date) return s;
+  if (isDate_(s)) return s;
   const m = String(s || '').match(/(\d{4})[\/\-年](\d{1,2})[\/\-月](\d{1,2})/);
   if (!m) return new Date();
   return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
@@ -320,8 +325,39 @@ function parseDate_(s) {
 
 /** セルの値を 'HH:mm' 表記に（Date でも文字列でもOK） */
 function timeStr_(v) {
-  if (v instanceof Date) return Utilities.formatDate(v, TZ, 'HH:mm');
+  if (isDate_(v)) return Utilities.formatDate(v, TZ, 'HH:mm');
   return String(v == null ? '' : v).trim();
+}
+
+/**
+ * 目安時間を「分」の数値にする。
+ *  5        → 5
+ *  '5分'     → 5
+ *  '10 min' → 10
+ *  '1時間30分' → 90
+ *  '約5分程度' → 5
+ *  時刻セル（0:05）→ 5
+ *  空欄・読めない値 → 0
+ */
+function toMinutes_(v) {
+  if (v === '' || v === null || v === undefined) return 0;
+  if (typeof v === 'number') return v;
+  if (isDate_(v)) return v.getHours() * 60 + v.getMinutes();
+
+  let s = String(v)
+    .replace(/[０-９]/g, function (c) { return String.fromCharCode(c.charCodeAt(0) - 0xFEE0); })
+    .replace(/[．，,]/g, function (c) { return c === '．' ? '.' : ''; })
+    .replace(/\s/g, '');
+
+  let total = 0, hit = false;
+  const h = s.match(/(\d+(?:\.\d+)?)(?:時間|hours?|hrs?|h)/i);
+  if (h) { total += parseFloat(h[1]) * 60; hit = true; s = s.replace(h[0], ''); }
+  const m = s.match(/(\d+(?:\.\d+)?)(?:分|minutes?|mins?|m)/i);
+  if (m) { total += parseFloat(m[1]); hit = true; }
+  if (hit) return Math.round(total);
+
+  const n = parseFloat(s.replace(/[^\d.\-]/g, ''));
+  return isNaN(n) ? 0 : n;
 }
 
 /** その日が月末か */
@@ -624,7 +660,8 @@ function normalizeMaster_() {
     }
     if (!String(r[col.phase - 1] || '').trim()) { r[col.phase - 1] = DEFAULT_PHASE; changed.phase = true; }
     if (String(r[col.freq - 1] || '').trim() === '') { r[col.freq - 1] = '毎日'; changed.freq = true; }
-    if (r[col.min - 1] === '' || r[col.min - 1] === null) { r[col.min - 1] = 0; changed.min = true; }
+    // 目安時間は「5分」のような書き方も使われるため、マスター側の値は書き換えない
+    // （読み取るときに toMinutes_() で分に変換する）
     if (requiredIsBool && (r[col.required - 1] === '' || r[col.required - 1] === null)) {
       r[col.required - 1] = false; changed.required = true;
     }
@@ -634,7 +671,7 @@ function normalizeMaster_() {
   });
 
   // 変わった列だけ書き戻す
-  ['id', 'phase', 'freq', 'min', 'required', 'enabled'].forEach(function (k) {
+  ['id', 'phase', 'freq', 'required', 'enabled'].forEach(function (k) {
     if (!changed[k]) return;
     const c = col[k];
     const out = vals.map(function (r) { return [r[c - 1]]; });
@@ -674,7 +711,7 @@ function getMasterTasks_() {
       id: String(get(r, 'id') || '').trim() || ('R' + (i + 2)),
       phase: String(get(r, 'phase') || DEFAULT_PHASE).trim(),
       name: String(get(r, 'name') || '').trim(),
-      min: Number(get(r, 'min')) || 0,
+      min: toMinutes_(get(r, 'min')),   // 「5分」のような文字列でも分に変換
       freq: get(r, 'freq'),
       required: toBool_(get(r, 'required')),
       memo: get(r, 'memo') || '',
@@ -735,7 +772,7 @@ function setupLogSheet_() {
 
 /** 履歴の日付セルを 'yyyy/MM/dd' 文字列に正規化 */
 function logDateStr_(v) {
-  if (v instanceof Date) return dateStr_(v);
+  if (isDate_(v)) return dateStr_(v);
   return String(v == null ? '' : v).trim();
 }
 
@@ -831,7 +868,7 @@ function getLogByDate_(date) {
         time: timeStr_(g(r, 'time')),
         staff: g(r, 'staff') || '',
         memo: g(r, 'memo') || '',
-        min: Number(g(r, 'min')) || 0,
+        min: toMinutes_(g(r, 'min')),
       };
     });
 }
@@ -1057,7 +1094,7 @@ function checkRowsToRecords_(sh) {
       time: timeStr_(r[CHK.TIME - 1]),
       staff: r[CHK.STAFF - 1] || '',
       memo: r[CHK.MEMO - 1] || '',
-      min: Number(r[CHK.MIN - 1]) || 0,
+      min: toMinutes_(r[CHK.MIN - 1]),
     });
   });
   return out;
@@ -1170,7 +1207,7 @@ function handleEdit_(e) {
       time: timeStr_(vals[i][CHK.TIME - 1]),
       staff: vals[i][CHK.STAFF - 1] || '',
       memo: vals[i][CHK.MEMO - 1] || '',
-      min: Number(vals[i][CHK.MIN - 1]) || 0,
+      min: toMinutes_(vals[i][CHK.MIN - 1]),
     });
   }
   if (records.length) writeHistoryRows_(date, records);
@@ -1400,7 +1437,7 @@ function pushDailySummaryToCentral_(date) {
   if (last >= 2) {
     const keys = sh.getRange(2, 1, last - 1, 2).getValues();
     for (let i = 0; i < keys.length; i++) {
-      const d = keys[i][0] instanceof Date ? dateStr_(keys[i][0]) : String(keys[i][0]).trim();
+      const d = isDate_(keys[i][0]) ? dateStr_(keys[i][0]) : String(keys[i][0]).trim();
       if (d === String(date) && String(keys[i][1]).trim() === String(c.STORE_ID)) {
         sh.getRange(i + 2, 1, 1, CENTRAL_HEADER.length).setValues([row]);
         return;

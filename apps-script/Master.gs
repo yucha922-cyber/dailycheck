@@ -96,7 +96,8 @@ function normalizeMaster_() {
     }
     if (!String(r[col.phase - 1] || '').trim()) { r[col.phase - 1] = DEFAULT_PHASE; changed.phase = true; }
     if (String(r[col.freq - 1] || '').trim() === '') { r[col.freq - 1] = '毎日'; changed.freq = true; }
-    if (r[col.min - 1] === '' || r[col.min - 1] === null) { r[col.min - 1] = 0; changed.min = true; }
+    // 目安時間は「5分」のような書き方も使われるため、マスター側の値は書き換えない
+    // （読み取るときに toMinutes_() で分に変換する）
     if (requiredIsBool && (r[col.required - 1] === '' || r[col.required - 1] === null)) {
       r[col.required - 1] = false; changed.required = true;
     }
@@ -106,7 +107,7 @@ function normalizeMaster_() {
   });
 
   // 変わった列だけ書き戻す
-  ['id', 'phase', 'freq', 'min', 'required', 'enabled'].forEach(function (k) {
+  ['id', 'phase', 'freq', 'required', 'enabled'].forEach(function (k) {
     if (!changed[k]) return;
     const c = col[k];
     const out = vals.map(function (r) { return [r[c - 1]]; });
@@ -146,7 +147,7 @@ function getMasterTasks_() {
       id: String(get(r, 'id') || '').trim() || ('R' + (i + 2)),
       phase: String(get(r, 'phase') || DEFAULT_PHASE).trim(),
       name: String(get(r, 'name') || '').trim(),
-      min: Number(get(r, 'min')) || 0,
+      min: toMinutes_(get(r, 'min')),   // 「5分」のような文字列でも分に変換
       freq: get(r, 'freq'),
       required: toBool_(get(r, 'required')),
       memo: get(r, 'memo') || '',
