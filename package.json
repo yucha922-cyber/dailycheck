@@ -1,0 +1,10 @@
+{
+  "name": "dailycheck",
+  "version": "2.0.1",
+  "private": true,
+  "description": "サロン日次業務チェック（Googleスプレッドシート + Apps Script）",
+  "scripts": {
+    "test": "node test/run.js",
+    "build": "node tools/build.js"
+  }
+}

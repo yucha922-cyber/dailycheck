@@ -1,38 +1,64 @@
 /**
  * ============================================================
- *  Menu.gs  ―  カスタムメニュー & トリガー設定
+ *  Menu.gs  ―  カスタムメニュー
  * ============================================================
  */
 
-/** スプレッドシートを開いたときにメニューを表示（簡易トリガー） */
+/** シートを開いたとき */
 function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('🌸 サロン業務')
-    .addItem('▶ 本日のチェックを開く', 'openChecklist')
-    .addItem('✅ 本日分を確定（履歴に保存）', 'finalizeToday_')
-    .addItem('📊 ダッシュボードを更新', 'buildDashboard_')
+    .addItem('▶ 今日のチェックを開く', 'openChecklist')
+    .addItem('🔄 マスターの内容を反映（今日の分を作り直す）', 'refreshChecklist')
+    .addItem('✅ 今日の分を確定（履歴に保存）', 'finalizeToday')
     .addSeparator()
+    .addItem('🩺 動作チェック（診断）', 'runDiagnostics')
     .addItem('🏗 初期セットアップ（初回のみ）', 'setupAll')
     .addItem('⏰ 自動化トリガーを設定', 'installTriggers')
     .addSeparator()
-    .addItem('☁ 本部へ本日サマリを送信', 'pushTodayToCentral')
+    .addItem('📊 ダッシュボードを更新', 'refreshDashboard')
+    .addItem('☁ 本部へ今日のサマリを送信', 'pushTodayToCentral')
     .addToUi();
+
+  // 日付が変わっていたら開いた時点で当日分に作り直す
+  try {
+    const sh = checkSheet_(false);
+    if (sh && getCheckDate_(sh) !== todayStr_()) buildChecklist_();
+  } catch (err) {
+    Logger.log('onOpen refresh skipped: ' + err);
+  }
 }
 
-/** チェック画面へ移動 */
+/** チェック画面へ移動（無ければ作る） */
 function openChecklist() {
-  const sh = ss_().getSheetByName(CONFIG.SHEETS.CHECK);
-  if (sh) ss_().setActiveSheet(sh);
-  else buildChecklist_();
+  clearCfgCache_();
+  let sh = checkSheet_(false);
+  if (!sh || getCheckDate_(sh) !== todayStr_()) sh = buildChecklist_();
+  ss_().setActiveSheet(sh);
 }
 
-/** 本部送信（メニュー用ラッパー） */
-function pushTodayToCentral() {
-  if (!CONFIG.CENTRAL_SS_ID) {
-    ss_().toast('Config.gs の CENTRAL_SS_ID が未設定です。', '未設定', 6);
+/** ダッシュボード更新（設定でOFFなら案内） */
+function refreshDashboard() {
+  clearCfgCache_();
+  if (!cfg_().USE_DASHBOARD) {
+    alert_('ダッシュボードは無効です',
+      '「' + SHEET_DEFS.SETTINGS.canonical + '」タブの「ダッシュボードを使う」を TRUE（✓）にすると使えます。');
     return;
   }
-  finalizeToday_();
+  buildDashboard_();
+  ss_().setActiveSheet(sheetOf_('DASH', true));
+}
+
+/** 本部送信（メニュー用） */
+function pushTodayToCentral() {
+  clearCfgCache_();
+  const c = cfg_();
+  if (!c.CENTRAL_SS_ID) {
+    alert_('未設定',
+      '「' + SHEET_DEFS.SETTINGS.canonical + '」タブの「本部集約スプレッドシートID」を入力してください。');
+    return;
+  }
+  finalizeDay_(todayStr_(), true);
   pushDailySummaryToCentral_(todayStr_());
-  ss_().toast('本部へ本日サマリを送信しました。', '送信完了', 5);
+  ss_().toast('本部へ今日のサマリを送信しました。', '送信完了', 5);
 }
