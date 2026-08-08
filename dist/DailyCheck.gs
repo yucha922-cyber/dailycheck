@@ -329,6 +329,25 @@ function timeStr_(v) {
   return String(v == null ? '' : v).trim();
 }
 
+/** 'HH:mm'（'9:05' のような1桁も可）→ 0時からの分数。読めなければ -1 */
+function timeToMin_(v) {
+  const m = timeStr_(v).match(/(\d{1,2})\s*[:：]\s*(\d{1,2})/);
+  if (!m) return -1;
+  const h = Number(m[1]), mi = Number(m[2]);
+  if (h > 23 || mi > 59) return -1;
+  return h * 60 + mi;
+}
+
+/** 分数 → 'HH:mm' */
+function minToTimeStr_(n) {
+  if (n === null || n === undefined || n < 0) return '';
+  const h = Math.floor(n / 60), m = Math.round(n % 60);
+  return ('0' + h).slice(-2) + ':' + ('0' + m).slice(-2);
+}
+
+/** その月の日数 */
+function daysInMonth_(y, m) { return new Date(y, m + 1, 0).getDate(); }
+
 /**
  * 目安時間を「分」の数値にする。
  *  5        → 5
@@ -770,10 +789,17 @@ function setupLogSheet_() {
   return sh;
 }
 
-/** 履歴の日付セルを 'yyyy/MM/dd' 文字列に正規化 */
+/**
+ * 履歴の日付セルを 'yyyy/MM/dd' 文字列に正規化。
+ * 「2026/8/1」のような0埋め無しの文字列も揃えます
+ * （月間集計は文字列の大小で期間を絞るため、桁が揃っている必要があります）。
+ */
 function logDateStr_(v) {
   if (isDate_(v)) return dateStr_(v);
-  return String(v == null ? '' : v).trim();
+  const s = String(v == null ? '' : v).trim();
+  const m = s.match(/^(\d{4})[\/\-年](\d{1,2})[\/\-月](\d{1,2})/);
+  if (!m) return s;
+  return m[1] + '/' + ('0' + m[2]).slice(-2) + '/' + ('0' + m[3]).slice(-2);
 }
 
 /**
@@ -841,43 +867,70 @@ function writeHistoryRows_(date, records) {
 /** 1件だけ upsert */
 function writeHistoryRow_(date, rec) { writeHistoryRows_(date, [rec]); }
 
-/** 指定日の履歴（この店舗分） */
-function getLogByDate_(date) {
+/** 履歴の1行 → 扱いやすいオブジェクトに */
+function logRowToObj_(date, r, col) {
+  const g = function (k) { return col[k] ? r[col[k] - 1] : ''; };
+  return {
+    date: date,
+    taskId: String(g('taskId') || '').trim(),
+    name: g('name'),
+    phase: g('phase'),
+    done: toBool_(g('done')),
+    time: timeStr_(g('time')),
+    staff: g('staff') || '',
+    memo: g('memo') || '',
+    min: toMinutes_(g('min')),
+  };
+}
+
+/**
+ * 期間内（この店舗分）の履歴を、日付ごとにまとめて返す。
+ * 月間集計のように何日分も見るときは、これで1回だけ読み込みます。
+ * @param {string} from 'yyyy/MM/dd'（含む・省略可）
+ * @param {string} to   'yyyy/MM/dd'（含む・省略可）
+ * @return {Object} { 'yyyy/MM/dd': [ログ, ...], ... }
+ */
+function getLogsGroupedByDate_(from, to) {
+  const out = {};
   const sh = logSheet_(false);
-  if (!sh || sh.getLastRow() < 2) return [];
+  if (!sh || sh.getLastRow() < 2) return out;
   const col = resolveColumns_(sh, LOG_FIELDS, 1, false);
-  if (!col.date || !col.taskId) return [];
+  if (!col.date || !col.taskId) return out;
   const c = cfg_();
   const width = Math.max(sh.getLastColumn(), 1);
   const vals = sh.getRange(2, 1, sh.getLastRow() - 1, width).getValues();
-  const g = function (r, k) { return col[k] ? r[col[k] - 1] : ''; };
 
-  return vals
-    .filter(function (r) {
-      if (logDateStr_(g(r, 'date')) !== String(date)) return false;
-      const sid = String(g(r, 'storeId') || '').trim();
-      return !sid || sid === String(c.STORE_ID);
-    })
-    .map(function (r) {
-      return {
-        date: date,
-        taskId: String(g(r, 'taskId') || '').trim(),
-        name: g(r, 'name'),
-        phase: g(r, 'phase'),
-        done: toBool_(g(r, 'done')),
-        time: timeStr_(g(r, 'time')),
-        staff: g(r, 'staff') || '',
-        memo: g(r, 'memo') || '',
-        min: toMinutes_(g(r, 'min')),
-      };
-    });
+  vals.forEach(function (r) {
+    const ds = logDateStr_(r[col.date - 1]);
+    if (!ds) return;
+    if (from && ds < String(from)) return;      // 'yyyy/MM/dd' は文字列比較で日付順になる
+    if (to && ds > String(to)) return;
+    const sid = String((col.storeId ? r[col.storeId - 1] : '') || '').trim();
+    if (sid && sid !== String(c.STORE_ID)) return;
+    (out[ds] = out[ds] || []).push(logRowToObj_(ds, r, col));
+  });
+  return out;
+}
+
+/** 指定日の履歴（この店舗分） */
+function getLogByDate_(date) {
+  return getLogsGroupedByDate_(date, date)[String(date)] || [];
 }
 
 /** 指定日の完了統計 */
 function getDailyStats_(date) {
-  const logs = getLogByDate_(date);
-  const doneMap = {};
-  logs.forEach(function (l) { doneMap[l.taskId] = l.done; });
+  return statsFromLogs_(date, getLogByDate_(date));
+}
+
+/**
+ * 読み込み済みの履歴から、その日の完了統計を作る。
+ * @param {string} date 'yyyy/MM/dd'
+ * @param {Array} logs  その日の履歴（getLogsGroupedByDate_ の1日分）
+ */
+function statsFromLogs_(date, logs) {
+  logs = logs || [];
+  const doneMap = {}, timeMap = {};
+  logs.forEach(function (l) { doneMap[l.taskId] = l.done; timeMap[l.taskId] = l.time; });
 
   // 当日 …… 母数は「今日やるべき業務」。まだ触っていない業務も未完了として数える
   // 過去日 …… 確定済みの履歴をそのまま使う
@@ -896,15 +949,23 @@ function getDailyStats_(date) {
   PHASE_ORDER.forEach(function (p) { byPhase[p] = { total: 0, done: 0 }; });
   const notDone = [];
   let done = 0;
+  let lastMin = -1;             // 最後に完了した業務の時刻（＝100%に達した時刻）
 
   base.forEach(function (t) {
     if (!byPhase[t.phase]) byPhase[t.phase] = { total: 0, done: 0 };
     byPhase[t.phase].total++;
-    if (t.done) { done++; byPhase[t.phase].done++; }
-    else notDone.push(t.phase + '：' + t.name);
+    if (t.done) {
+      done++;
+      byPhase[t.phase].done++;
+      const mm = timeToMin_(timeMap[t.id]);
+      if (mm > lastMin) lastMin = mm;
+    } else {
+      notDone.push(t.phase + '：' + t.name);
+    }
   });
 
   const total = base.length;
+  const full = total > 0 && done === total;
   return {
     date: date,
     total: total,
@@ -912,6 +973,9 @@ function getDailyStats_(date) {
     pct: total ? Math.round((done / total) * 100) : 0,
     byPhase: byPhase,
     notDone: notDone,
+    // 全業務が完了した日だけ、その達成時刻を 'HH:mm' で返す（時刻未記録なら空）
+    doneAt: full && lastMin >= 0 ? minToTimeStr_(lastMin) : '',
+    isFull: full,
   };
 }
 
@@ -1273,20 +1337,30 @@ function bar_(pct) {
  * ============================================================
  */
 
+const DASH_COLS = 8;    // A〜H（H列＝100%達成時刻）
+
 function buildDashboard_() {
   const c = cfg_();
   const sh = sheetOf_('DASH', true);
+  if (sh.getMaxColumns() < DASH_COLS) {
+    sh.insertColumnsAfter(sh.getMaxColumns(), DASH_COLS - sh.getMaxColumns());
+  }
+  // 前回のレイアウトの結合が残っていると書き込めないので一度解除する
+  try {
+    sh.getRange(1, 1, sh.getMaxRows(), DASH_COLS).breakApart();
+  } catch (err) {}
   sh.clear();
   const today = todayStr_();
   const s = getDailyStats_(today);
 
   sh.setColumnWidth(1, 20);
   sh.setColumnWidths(2, 6, 110);
+  sh.setColumnWidth(8, 110);          // H列（100%達成時刻）
 
-  sh.getRange(2, 2, 1, 6).merge()
+  sh.getRange(2, 2, 1, 7).merge()
     .setValue('📊 ' + c.STORE_NAME + '　業務ダッシュボード')
     .setFontSize(16).setFontWeight('bold').setFontColor('#263238');
-  sh.getRange(3, 2, 1, 6).merge()
+  sh.getRange(3, 2, 1, 7).merge()
     .setValue('更新：' + todayLabel_() + ' ' + nowTimeStr_() +
               '　／　営業時間 ' + c.OPEN_TIME + '〜' + c.CLOSE_TIME)
     .setFontColor('#78909c');
@@ -1316,7 +1390,7 @@ function buildDashboard_() {
 
   // --- 想定作業時間 vs 目標 ---
   const est = estimateMinutes_();
-  sh.getRange(10, 2, 1, 6).merge().setValue('⏱ 想定作業時間（施術以外）')
+  sh.getRange(10, 2, 1, 7).merge().setValue('⏱ 想定作業時間（施術以外）')
     .setFontWeight('bold').setFontColor('#546e7a');
   sh.getRange(11, 2, 1, 4).setValues([['区分', '想定(分)', '目標(分)', '判定']])
     .setFontWeight('bold').setBackground('#eceff1');
@@ -1325,7 +1399,7 @@ function buildDashboard_() {
     sh.getRange(12 + i, 2, 1, 4).setValues([[row[0], row[1], c.BUFFER_MIN, ok ? '✅ OK' : '⚠️ 超過']]);
     sh.getRange(12 + i, 5).setFontColor(ok ? '#1e8e3e' : '#d93025');
   });
-  sh.getRange(14, 2, 1, 6).merge()
+  sh.getRange(14, 2, 1, 7).merge()
     .setValue('※「営業中」は施術と並行のため対象外。開店前・閉店前を目標時間内に収めるのが狙いです。')
     .setFontColor('#90a4ae').setFontSize(9);
 
@@ -1340,20 +1414,42 @@ function buildDashboard_() {
       .setValues(s.notDone.map(function (x) { return [x]; })).setFontColor('#c5221f');
   }
 
-  // --- 直近7日間の推移 ---
-  sh.getRange(16, 5, 1, 3).merge().setValue('📈 直近7日間の完了率')
+  // --- 1ヶ月間（当月分すべて）の推移 ---
+  const month = new Date();
+  sh.getRange(16, 5, 1, 4).merge()
+    .setValue('📈 ' + monthLabel_(month) + 'の完了率（1ヶ月間）')
     .setFontWeight('bold').setFontColor('#546e7a');
-  const trend = getTrend_(7);
+  sh.getRange(17, 5, 1, 4).setValues([['日付', '完了率', '推移', '100%達成時刻']])
+    .setFontWeight('bold').setBackground('#eceff1').setFontColor('#546e7a');
+
+  const trend = getMonthTrend_(month);
+  const TREND_START = 18;
   if (trend.length) {
-    sh.getRange(17, 5, trend.length, 2)
+    sh.getRange(TREND_START, 5, trend.length, 2)
       .setValues(trend.map(function (t) { return [t.label, t.has ? t.pct + '%' : '―']; }));
-    sh.getRange(17, 7, trend.length, 1)
+    sh.getRange(TREND_START, 7, trend.length, 1)
       .setValues(trend.map(function (t) { return [t.has ? bar_(t.pct) : '']; }))
       .setFontFamily('monospace');
+    // H列：その日 100% に達した時刻（未達成・データ無しは「―」）
+    sh.getRange(TREND_START, 8, trend.length, 1)
+      .setValues(trend.map(function (t) { return [fullTimeCell_(t)]; }))
+      .setHorizontalAlignment('center');
   }
 
   sh.getRange(1, 1).activate();
   return sh;
+}
+
+/** 「2026年8月」のような月ラベル */
+function monthLabel_(d) {
+  return d.getFullYear() + '年' + (d.getMonth() + 1) + '月';
+}
+
+/** H列に出す「100%達成時刻」の表示文字列 */
+function fullTimeCell_(t) {
+  if (!t.has) return '―';                 // その日の記録がまだ無い
+  if (t.pct < 100) return '―';            // 未達成
+  return t.doneAt || '時刻なし';           // 全完了だが完了時刻が記録されていない
 }
 
 /** 開店前・閉店前の想定作業時間合計 */
@@ -1367,19 +1463,33 @@ function estimateMinutes_() {
   return { before: before, after: after };
 }
 
-/** 直近 n 日の完了率 */
-function getTrend_(n) {
+/**
+ * その月の日ごとの完了率（1日〜）。
+ *  ・当月 …… 1日から「今日」まで（先の日付は出しません）
+ *  ・過去月 … 1日から月末まで
+ * 履歴シートは1回だけ読み、日付ごとに振り分けて集計します。
+ * @param {Date=} base 対象月に含まれる任意の日（省略時は今日）
+ */
+function getMonthTrend_(base) {
+  base = base || new Date();
+  const y = base.getFullYear(), m = base.getMonth();
+  const now = new Date();
+  const isCurrentMonth = (y === now.getFullYear() && m === now.getMonth());
+  const lastDay = isCurrentMonth ? now.getDate() : daysInMonth_(y, m);
+
+  const grouped = getLogsGroupedByDate_(dateStr_(new Date(y, m, 1)),
+                                        dateStr_(new Date(y, m, lastDay)));
   const out = [];
-  for (let i = n - 1; i >= 0; i--) {
-    const d = new Date();
-    d.setDate(d.getDate() - i);
+  for (let day = 1; day <= lastDay; day++) {
+    const d = new Date(y, m, day);
     const ds = dateStr_(d);
-    const logs = getLogByDate_(ds);
-    const st = getDailyStats_(ds);
+    const logs = grouped[ds] || [];
+    const st = statsFromLogs_(ds, logs);
     out.push({
       label: Utilities.formatDate(d, TZ, 'MM/dd') + '(' + WEEKDAY_JP[d.getDay()] + ')',
       pct: st.pct,
       has: logs.length > 0,
+      doneAt: st.doneAt,
     });
   }
   return out;
