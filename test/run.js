@@ -224,6 +224,69 @@ ok(String(s4[0].getRange(2, 4).getValue()) === '10:40', '期限など未使用�
 const est = ctx.estimateMinutes_();
 ok(est.before === 5 && est.after === 2, '想定作業時間の合計も正しく計算される', est);
 
+/* ---------- 7. 時刻ユーティリティ ---------- */
+section('時刻の変換');
+ok(ctx.timeToMin_('20:15') === 1215, '「20:15」→ 1215分');
+ok(ctx.timeToMin_('9:05') === 545, '1桁の「9:05」も読める');
+ok(ctx.timeToMin_(new Date(2026, 0, 1, 7, 30)) === 450, '時刻セルも読める');
+ok(ctx.timeToMin_('') === -1, '空欄 → -1');
+ok(ctx.timeToMin_('あとで') === -1, '読めない値 → -1');
+ok(ctx.timeToMin_('99:99') === -1, 'あり得ない時刻 → -1');
+ok(ctx.minToTimeStr_(545) === '09:05', '545分 → 「09:05」（0埋め）');
+ok(ctx.logDateStr_('2026/8/1') === '2026/08/01', '履歴の「2026/8/1」を 0埋めに揃える');
+ok(ctx.logDateStr_(new Date(2026, 7, 1)) === '2026/08/01', '日付セルも 0埋めに揃える');
+
+/* ---------- 8. ダッシュボードの1ヶ月間の完了率 ---------- */
+section('ダッシュボード：1ヶ月間の完了率と 100%達成時刻（H列）');
+const s5 = ['各業務マスター', '今日のチェック', '履歴', '設定'].map(n => new mock.FakeSheet(n));
+mock.SpreadsheetApp._ss = new mock.FakeSpreadsheet(s5);
+ctx.clearCfgCache_();
+ctx.setupAll();
+
+const now = new Date();
+const dayOf = n => ctx.dateStr_(new Date(now.getFullYear(), now.getMonth(), n));
+
+// 1日＝全業務完了（最後の完了は 20:15）／2日＝半分だけ完了
+ctx.writeHistoryRows_(dayOf(1), [
+  { taskId: 'T1', name: '清掃', phase: '開店前', done: true, time: '10:40', min: 10 },
+  { taskId: 'T2', name: '売上確認', phase: '閉店前', done: true, time: '20:15', min: 5 },
+  { taskId: 'T3', name: '現金確認', phase: '閉店前', done: true, time: '19:50', min: 3 },
+]);
+ctx.writeHistoryRows_(dayOf(2), [
+  { taskId: 'T1', name: '清掃', phase: '開店前', done: true, time: '10:30', min: 10 },
+  { taskId: 'T2', name: '売上確認', phase: '閉店前', done: false, time: '', min: 5 },
+]);
+
+const trend = ctx.getMonthTrend_();
+ok(trend.length === now.getDate(), '当月1日〜今日の日数ぶんの行が出る（' + trend.length + '行）', trend.length);
+ok(trend[0].label.indexOf(('0' + (now.getMonth() + 1)).slice(-2) + '/01') === 0, '先頭は当月1日', trend[0].label);
+const todayLabel = ('0' + (now.getMonth() + 1)).slice(-2) + '/' + ('0' + now.getDate()).slice(-2);
+ok(trend[trend.length - 1].label.indexOf(todayLabel) === 0, '最後は今日（未来の日付は出さない）', trend[trend.length - 1].label);
+
+const past = now.getDate() >= 3;   // 1〜2日はまだ「今日」なので集計方法が変わる
+if (past) {
+  ok(trend[0].pct === 100, '1日は完了率 100%', trend[0].pct);
+  ok(trend[0].doneAt === '20:15', '1日の 100%達成時刻は最後の完了時刻 20:15', trend[0].doneAt);
+  ok(ctx.fullTimeCell_(trend[0]) === '20:15', 'H列に 20:15 が出る');
+  ok(trend[1].pct === 50, '2日は完了率 50%', trend[1].pct);
+  ok(ctx.fullTimeCell_(trend[1]) === '―', '未達成の日の H列は「―」', ctx.fullTimeCell_(trend[1]));
+} else {
+  console.log('  （今日が月初のため 1日・2日の判定はスキップ）');
+}
+ok(ctx.fullTimeCell_({ has: false, pct: 0, doneAt: '' }) === '―', '記録の無い日の H列は「―」');
+ok(ctx.fullTimeCell_({ has: true, pct: 100, doneAt: '' }) === '時刻なし', '全完了でも時刻未記録なら「時刻なし」');
+
+ctx.buildDashboard_();
+const dash = mock.SpreadsheetApp._ss.getSheetByName('ダッシュボード');
+ok(dash !== null, 'ダッシュボードタブが作られる');
+const dashTitle = String(dash.getRange(16, 5).getValue());
+ok(dashTitle.indexOf((now.getMonth() + 1) + '月の完了率') >= 0, '見出しが「◯月の完了率（1ヶ月間）」になっている', dashTitle);
+ok(String(dash.getRange(17, 8).getValue()) === '100%達成時刻', 'H列の見出しが「100%達成時刻」', dash.getRange(17, 8).getValue());
+const hCol = dash.getRange(18, 8, trend.length, 1).getValues().map(r => String(r[0]));
+ok(hCol.length === trend.length && hCol.every(v => v !== ''), 'H列が日数ぶん埋まっている', hCol.slice(0, 3));
+if (past) ok(hCol[0] === '20:15', 'H列の1日目が 20:15', hCol[0]);
+ok(String(dash.getRange(18, 5).getValue()) === trend[0].label, 'データは18行目から（1日）', dash.getRange(18, 5).getValue());
+
 console.log('\n----------------------------------------');
 console.log(failures === 0 ? `全 ${checks} 件パス` : `${failures} / ${checks} 件 失敗`);
 process.exit(failures === 0 ? 0 : 1);

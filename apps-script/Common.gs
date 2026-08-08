@@ -173,6 +173,25 @@ function timeStr_(v) {
   return String(v == null ? '' : v).trim();
 }
 
+/** 'HH:mm'（'9:05' のような1桁も可）→ 0時からの分数。読めなければ -1 */
+function timeToMin_(v) {
+  const m = timeStr_(v).match(/(\d{1,2})\s*[:：]\s*(\d{1,2})/);
+  if (!m) return -1;
+  const h = Number(m[1]), mi = Number(m[2]);
+  if (h > 23 || mi > 59) return -1;
+  return h * 60 + mi;
+}
+
+/** 分数 → 'HH:mm' */
+function minToTimeStr_(n) {
+  if (n === null || n === undefined || n < 0) return '';
+  const h = Math.floor(n / 60), m = Math.round(n % 60);
+  return ('0' + h).slice(-2) + ':' + ('0' + m).slice(-2);
+}
+
+/** その月の日数 */
+function daysInMonth_(y, m) { return new Date(y, m + 1, 0).getDate(); }
+
 /**
  * 目安時間を「分」の数値にする。
  *  5        → 5
