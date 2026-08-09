@@ -94,13 +94,20 @@ function buildChecklist_(targetDate) {
     const notes = tasks.map(function (t) { return [t.memo ? String(t.memo) : '']; });
     sh.getRange(CHK_DATA_START, CHK.NAME, tasks.length, 1).setNotes(notes);
     sh.getRange(CHK_DATA_START, CHK.NAME, tasks.length, 1).setFontWeight('bold');
-    applyPhaseColors_(sh, CHK_DATA_START, CHK.PHASE, CHK.PHASE);
-    sh.getRange(CHK_DATA_START, CHK.TIME, tasks.length, 1).setHorizontalAlignment('center');
   } else {
     sh.getRange(CHK_DATA_START, 1, 1, CHK_COLS).merge()
       .setValue('今日やる業務がありません。「' + SHEET_DEFS.MASTER.canonical +
                 '」の「頻度」と「有効」を確認してください。')
       .setFontColor('#d93025');
+  }
+
+  // --- 帰宅時間（業務ではなく記録欄。完了率の母数には入れません） ---
+  const leaveRow = CHK_DATA_START + (tasks.length || 1);
+  writeLeaveRow_(sh, leaveRow, carry[LEAVE_ROW.id] || {});
+
+  if (tasks.length) {
+    applyPhaseColors_(sh, CHK_DATA_START, CHK.PHASE, CHK.PHASE);
+    sh.getRange(CHK_DATA_START, CHK.TIME, tasks.length, 1).setHorizontalAlignment('center');
   }
 
   // --- 見た目 ---
@@ -116,6 +123,49 @@ function buildChecklist_(targetDate) {
 
   updateChecklistStatus_(sh);
   return sh;
+}
+
+/**
+ * 「帰宅時間」の行を書く。
+ * チェックボックスは付けず、「完了時刻」の欄に院を出た時刻を入力してもらいます。
+ * @param {Sheet} sh
+ * @param {number} row 書き込む行
+ * @param {Object} state 前回の入力 {time, staff, memo}
+ */
+function writeLeaveRow_(sh, row, state) {
+  state = state || {};
+  sh.getRange(row, 1, 1, CHK_COLS).setValues([[
+    '', LEAVE_ROW.id, LEAVE_ROW.phase, LEAVE_ROW.name, '',
+    state.time || '', state.staff || '', state.memo || '',
+  ]]);
+
+  sh.getRange(row, 1, 1, CHK_COLS).setBackground('#fff8e1');
+  sh.getRange(row, CHK.DONE).setBackground('#eceff1');           // ✓は付けない欄
+  sh.getRange(row, CHK.NAME).setFontWeight('bold').setNote(LEAVE_ROW.note);
+  sh.getRange(row, CHK.TIME)
+    .setHorizontalAlignment('center').setFontWeight('bold')
+    .setNote('院を出た時刻（例 20:30）');
+  return row;
+}
+
+/**
+ * 「今日のチェック」の1行 → 履歴レコード。
+ * 帰宅時間の行は業務ではないので、時刻が入っていれば「記録あり」として残します。
+ */
+function checkRowToRecord_(r) {
+  const id = String(r[CHK.ID - 1] || '').trim();
+  if (!id) return null;
+  const time = timeStr_(r[CHK.TIME - 1]);
+  return {
+    taskId: id,
+    name: String(r[CHK.NAME - 1] || '').replace(/^★\s*/, ''),
+    phase: r[CHK.PHASE - 1],
+    done: isLeaveId_(id) ? !!time : r[CHK.DONE - 1] === true,
+    time: time,
+    staff: r[CHK.STAFF - 1] || '',
+    memo: r[CHK.MEMO - 1] || '',
+    min: isLeaveId_(id) ? 0 : toMinutes_(r[CHK.MIN - 1]),
+  };
 }
 
 /** メニュー・トリガーから呼ぶ「今日の分に更新」 */
@@ -163,18 +213,8 @@ function checkRowsToRecords_(sh) {
   const vals = sh.getRange(CHK_DATA_START, 1, last - CHK_DATA_START + 1, CHK_COLS).getValues();
   const out = [];
   vals.forEach(function (r) {
-    const id = String(r[CHK.ID - 1] || '').trim();
-    if (!id) return;
-    out.push({
-      taskId: id,
-      name: String(r[CHK.NAME - 1] || '').replace(/^★\s*/, ''),
-      phase: r[CHK.PHASE - 1],
-      done: r[CHK.DONE - 1] === true,
-      time: timeStr_(r[CHK.TIME - 1]),
-      staff: r[CHK.STAFF - 1] || '',
-      memo: r[CHK.MEMO - 1] || '',
-      min: toMinutes_(r[CHK.MIN - 1]),
-    });
+    const rec = checkRowToRecord_(r);
+    if (rec) out.push(rec);
   });
   return out;
 }
@@ -186,11 +226,16 @@ function updateChecklistStatus_(sh) {
   const c = cfg_();
   const last = sh.getLastRow();
   const n = Math.max(last - CHK_DATA_START + 1, 0);
-  let done = 0, total = 0;
+  let done = 0, total = 0, leaveAt = '';
   if (n > 0) {
-    const vals = sh.getRange(CHK_DATA_START, 1, n, CHK.ID).getValues();
+    const vals = sh.getRange(CHK_DATA_START, 1, n, CHK_COLS).getValues();
     vals.forEach(function (r) {
-      if (!String(r[CHK.ID - 1] || '').trim()) return;
+      const id = String(r[CHK.ID - 1] || '').trim();
+      if (!id) return;
+      if (isLeaveId_(id)) {                       // 帰宅時間は業務ではないので数えない
+        leaveAt = fmtTime_(r[CHK.TIME - 1]);
+        return;
+      }
       total++;
       if (r[CHK.DONE - 1] === true) done++;
     });
@@ -198,7 +243,8 @@ function updateChecklistStatus_(sh) {
   const pct = total ? Math.round((done / total) * 100) : 0;
   const cell = sh.getRange(2, 1);
   cell.setValue('営業時間 ' + c.OPEN_TIME + '〜' + c.CLOSE_TIME +
-                '　／　完了 ' + done + ' / ' + total + '（' + pct + '%）　' + bar_(pct));
+                '　／　完了 ' + done + ' / ' + total + '（' + pct + '%）　' + bar_(pct) +
+                (leaveAt ? '　／　帰宅 ' + leaveAt : ''));
   cell.setFontColor(pct >= 100 ? '#1e8e3e' : (pct >= 70 ? '#f9ab00' : '#546e7a'))
       .setFontWeight(pct >= 100 ? 'bold' : 'normal');
 }
@@ -261,8 +307,10 @@ function handleEdit_(e) {
     let timeChanged = false;
     for (let i = 0; i < n; i++) {
       const cur = timeStr_(vals[i][CHK.TIME - 1]);
+      const rowId = String(vals[i][CHK.ID - 1] || '').trim();
       let next = cur;
-      if (String(vals[i][CHK.ID - 1] || '').trim()) {
+      // 帰宅時間の行は ✓ で動かさない（手入力した時刻を消さない）
+      if (rowId && !isLeaveId_(rowId)) {
         if (vals[i][CHK.DONE - 1] === true && !cur) next = nowTimeStr_();
         else if (vals[i][CHK.DONE - 1] !== true) next = '';
       }
@@ -276,18 +324,8 @@ function handleEdit_(e) {
   // 履歴へ反映
   const records = [];
   for (let i = 0; i < n; i++) {
-    const id = String(vals[i][CHK.ID - 1] || '').trim();
-    if (!id) continue;
-    records.push({
-      taskId: id,
-      name: String(vals[i][CHK.NAME - 1] || '').replace(/^★\s*/, ''),
-      phase: vals[i][CHK.PHASE - 1],
-      done: vals[i][CHK.DONE - 1] === true,
-      time: timeStr_(vals[i][CHK.TIME - 1]),
-      staff: vals[i][CHK.STAFF - 1] || '',
-      memo: vals[i][CHK.MEMO - 1] || '',
-      min: toMinutes_(vals[i][CHK.MIN - 1]),
-    });
+    const rec = checkRowToRecord_(vals[i]);
+    if (rec) records.push(rec);
   }
   if (records.length) writeHistoryRows_(date, records);
   updateChecklistStatus_(sh);

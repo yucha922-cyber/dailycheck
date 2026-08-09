@@ -7,7 +7,7 @@
  * ============================================================
  */
 
-const DASH_COLS = 8;    // A〜H（H列＝100%達成時刻）
+const DASH_COLS = 9;    // A〜I（H列＝100%達成時刻／I列＝帰宅時間）
 
 function buildDashboard_() {
   const c = cfg_();
@@ -26,11 +26,12 @@ function buildDashboard_() {
   sh.setColumnWidth(1, 20);
   sh.setColumnWidths(2, 6, 110);
   sh.setColumnWidth(8, 110);          // H列（100%達成時刻）
+  sh.setColumnWidth(9, 110);          // I列（帰宅時間）
 
-  sh.getRange(2, 2, 1, 7).merge()
+  sh.getRange(2, 2, 1, 8).merge()
     .setValue('📊 ' + c.STORE_NAME + '　業務ダッシュボード')
     .setFontSize(16).setFontWeight('bold').setFontColor('#263238');
-  sh.getRange(3, 2, 1, 7).merge()
+  sh.getRange(3, 2, 1, 8).merge()
     .setValue('更新：' + todayLabel_() + ' ' + nowTimeStr_() +
               '　／　営業時間 ' + c.OPEN_TIME + '〜' + c.CLOSE_TIME)
     .setFontColor('#78909c');
@@ -60,7 +61,7 @@ function buildDashboard_() {
 
   // --- 想定作業時間 vs 目標 ---
   const est = estimateMinutes_();
-  sh.getRange(10, 2, 1, 7).merge().setValue('⏱ 想定作業時間（施術以外）')
+  sh.getRange(10, 2, 1, 8).merge().setValue('⏱ 想定作業時間（施術以外）')
     .setFontWeight('bold').setFontColor('#546e7a');
   sh.getRange(11, 2, 1, 4).setValues([['区分', '想定(分)', '目標(分)', '判定']])
     .setFontWeight('bold').setBackground('#eceff1');
@@ -69,7 +70,7 @@ function buildDashboard_() {
     sh.getRange(12 + i, 2, 1, 4).setValues([[row[0], row[1], c.BUFFER_MIN, ok ? '✅ OK' : '⚠️ 超過']]);
     sh.getRange(12 + i, 5).setFontColor(ok ? '#1e8e3e' : '#d93025');
   });
-  sh.getRange(14, 2, 1, 7).merge()
+  sh.getRange(14, 2, 1, 8).merge()
     .setValue('※「営業中」は施術と並行のため対象外。開店前・閉店前を目標時間内に収めるのが狙いです。')
     .setFontColor('#90a4ae').setFontSize(9);
 
@@ -86,10 +87,10 @@ function buildDashboard_() {
 
   // --- 1ヶ月間（当月分すべて）の推移 ---
   const month = new Date();
-  sh.getRange(16, 5, 1, 4).merge()
+  sh.getRange(16, 5, 1, 5).merge()
     .setValue('📈 ' + monthLabel_(month) + 'の完了率（1ヶ月間）')
     .setFontWeight('bold').setFontColor('#546e7a');
-  sh.getRange(17, 5, 1, 4).setValues([['日付', '完了率', '推移', '100%達成時刻']])
+  sh.getRange(17, 5, 1, 5).setValues([['日付', '完了率', '推移', '100%達成時刻', '帰宅時間']])
     .setFontWeight('bold').setBackground('#eceff1').setFontColor('#546e7a');
 
   const trend = getMonthTrend_(month);
@@ -103,6 +104,10 @@ function buildDashboard_() {
     // H列：その日 100% に達した時刻（未達成・データ無しは「―」）
     sh.getRange(TREND_START, 8, trend.length, 1)
       .setValues(trend.map(function (t) { return [fullTimeCell_(t)]; }))
+      .setHorizontalAlignment('center');
+    // I列：「今日のチェック」の帰宅時間欄に入力された、院を出た時刻
+    sh.getRange(TREND_START, 9, trend.length, 1)
+      .setValues(trend.map(function (t) { return [t.leaveAt || '―']; }))
       .setHorizontalAlignment('center');
   }
 
@@ -160,6 +165,7 @@ function getMonthTrend_(base) {
       pct: st.pct,
       has: logs.length > 0,
       doneAt: st.doneAt,
+      leaveAt: st.leaveAt,
     });
   }
   return out;

@@ -95,6 +95,14 @@ function makeRange(sheet, row, col, nr, nc) {
       for (let r = 0; r < nr; r++) for (let c = 0; c < nc; c++) sheet.notes[row - 1 + r][col - 1 + c] = notes[r][c];
       return proxy;
     },
+    setNote: (note) => {
+      for (let r = 0; r < nr; r++) for (let c = 0; c < nc; c++) sheet.notes[row - 1 + r][col - 1 + c] = note;
+      return proxy;
+    },
+    clearNote: () => {
+      for (let r = 0; r < nr; r++) for (let c = 0; c < nc; c++) sheet.notes[row - 1 + r][col - 1 + c] = '';
+      return proxy;
+    },
     getNote: () => sheet.notes[row - 1][col - 1],
     insertCheckboxes: () => {
       for (let r = 0; r < nr; r++) for (let c = 0; c < nc; c++) {

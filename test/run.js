@@ -287,6 +287,71 @@ ok(hCol.length === trend.length && hCol.every(v => v !== ''), 'H列が日数ぶ�
 if (past) ok(hCol[0] === '20:15', 'H列の1日目が 20:15', hCol[0]);
 ok(String(dash.getRange(18, 5).getValue()) === trend[0].label, 'データは18行目から（1日）', dash.getRange(18, 5).getValue());
 
+/* ---------- 9. 帰宅時間の欄 ---------- */
+section('今日のチェックの「帰宅時間」欄（ID 14）');
+const s6 = ['各業務マスター', '今日のチェック', '履歴', '設定'].map(n => new mock.FakeSheet(n));
+mock.SpreadsheetApp._ss = new mock.FakeSpreadsheet(s6);
+ctx.clearCfgCache_();
+ctx.setupAll();
+
+const chk6 = mock.SpreadsheetApp._ss.getSheetByName('今日のチェック');
+const log6 = mock.SpreadsheetApp._ss.getSheetByName('履歴');
+const lastRow6 = chk6.getLastRow();
+ok(String(chk6.getRange(lastRow6, 2).getValue()) === '14', '最終行の ID が 14', chk6.getRange(lastRow6, 2).getValue());
+ok(String(chk6.getRange(lastRow6, 4).getValue()) === '帰宅時間', '最終行の業務名が「帰宅時間」', chk6.getRange(lastRow6, 4).getValue());
+ok(chk6.getRange(lastRow6, 1).getValue() === '', '帰宅時間の行にチェックボックスは無い');
+ok(chk6.checkboxCells[lastRow6 + ',1'] !== true, '完了列のチェックボックス対象外', chk6.checkboxCells[lastRow6 + ',1']);
+ok(String(chk6.getRange(lastRow6, 4).getNote()).indexOf('院を出た時刻') >= 0, '入力方法のメモが付く');
+
+const taskCount6 = lastRow6 - 5;   // 帰宅時間の行を除いた業務数
+const status6 = String(chk6.getRange(2, 1).getValue());
+ok(status6.indexOf('完了 0 / ' + taskCount6 + '（') >= 0, '帰宅時間は完了率の母数に入らない（' + taskCount6 + '件）', status6);
+
+// 帰宅時間を入力 → 履歴に残り、完了率は変わらない
+chk6.getRange(lastRow6, 6).setValue('20:30');
+ctx.handleEdit_({ range: chk6.getRange(lastRow6, 6, 1, 1) });
+ok(String(chk6.getRange(lastRow6, 6).getValue()) === '20:30', '入力した帰宅時間が消えない');
+ok(String(chk6.getRange(2, 1).getValue()).indexOf('完了 0 / ' + taskCount6 + '（') >= 0, '帰宅時間を入れても完了率は変わらない');
+ok(String(chk6.getRange(2, 1).getValue()).indexOf('帰宅 20:30') >= 0, '上部に帰宅時間が表示される', chk6.getRange(2, 1).getValue());
+
+const logIds6 = log6.getRange(2, 4, Math.max(log6.getLastRow() - 1, 1), 1).getValues().map(r => String(r[0]));
+ok(logIds6.indexOf('14') >= 0, '履歴に帰宅時間（ID 14）が記録される', logIds6);
+const stats6 = ctx.getDailyStats_(ctx.todayStr_());
+ok(stats6.total === taskCount6, '完了統計の母数に帰宅時間が入らない', stats6.total);
+ok(stats6.leaveAt === '20:30', '完了統計から帰宅時間が取れる', stats6.leaveAt);
+ok(!stats6.notDone.some(x => x.indexOf('帰宅時間') >= 0), '未完了リストに帰宅時間が出ない', stats6.notDone);
+
+// 業務の ✓ を付けても帰宅時間は消えない
+chk6.getRange(5, 1).setValue(true);
+ctx.handleEdit_({ range: chk6.getRange(5, 1, chk6.getLastRow() - 4, 1) });
+ok(String(chk6.getRange(lastRow6, 6).getValue()) === '20:30', '✓の一括編集でも帰宅時間が消えない', chk6.getRange(lastRow6, 6).getValue());
+
+// 確定 → 全業務が 100% になった日として扱えるか
+section('全業務完了の日：100%達成時刻と帰宅時間が別々に出るか');
+const rows6 = chk6.getLastRow() - 5;
+for (let i = 0; i < rows6; i++) {
+  chk6.getRange(5 + i, 1).setValue(true);
+  chk6.getRange(5 + i, 6).setValue('1' + ('0' + (i % 10)).slice(-1) + ':00');
+}
+chk6.getRange(9, 6).setValue('21:45');    // いちばん遅い完了
+ctx.handleEdit_({ range: chk6.getRange(5, 1, rows6, 6) });
+const stats7 = ctx.getDailyStats_(ctx.todayStr_());
+ok(stats7.pct === 100, '全業務完了で 100%', stats7.pct);
+ok(stats7.doneAt === '21:45', '100%達成時刻は最後の完了時刻', stats7.doneAt);
+ok(stats7.leaveAt === '20:30', '帰宅時間は 100%達成時刻とは別に保持される', stats7.leaveAt);
+
+ctx.buildDashboard_();
+const dash2 = mock.SpreadsheetApp._ss.getSheetByName('ダッシュボード');
+ok(String(dash2.getRange(17, 9).getValue()) === '帰宅時間', 'I列の見出しが「帰宅時間」', dash2.getRange(17, 9).getValue());
+const todayRow = 18 + new Date().getDate() - 1;
+ok(String(dash2.getRange(todayRow, 8).getValue()) === '21:45', 'H列（今日）に 100%達成時刻', dash2.getRange(todayRow, 8).getValue());
+ok(String(dash2.getRange(todayRow, 9).getValue()) === '20:30', 'I列（今日）に帰宅時間', dash2.getRange(todayRow, 9).getValue());
+ok(String(dash2.getRange(18, 9).getValue()) === '―', '記録の無い日の I列は「―」', dash2.getRange(18, 9).getValue());
+
+section('診断が帰宅時間の行を「マスターに無い業務」と誤検出しないか');
+const rep2 = ctx.runDiagnostics();
+ok(rep2.indexOf('マスターに無い業務が画面に') < 0, '帰宅時間の行は突き合わせの対象外', rep2.split('\n').filter(l => l.indexOf('マスターに無い') >= 0));
+
 console.log('\n----------------------------------------');
 console.log(failures === 0 ? `全 ${checks} 件パス` : `${failures} / ${checks} 件 失敗`);
 process.exit(failures === 0 ? 0 : 1);
