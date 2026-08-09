@@ -52,6 +52,15 @@ function runDiagnostics() {
     lines.push('　今日の対象：' + todays.length + '件');
     if (!tasks.length) ng.push('マスターから業務を読み取れません（「業務名」の列見出しを確認）');
     if (tasks.length && !todays.length) ng.push('今日の対象が0件です（「頻度」「有効」を確認）');
+
+    // 「帰宅時間」欄の予約IDがマスターで使われていないか
+    const clash = tasks.filter(function (t) { return isLeaveId_(t.id); });
+    if (clash.length) {
+      lines.push('　⚠ ID「' + LEAVE_ROW.id + '」は帰宅時間欄の予約IDです（' +
+                 clash.map(function (t) { return t.name; }).join('、') + '）');
+      ng.push('各業務マスターの ID「' + LEAVE_ROW.id + '」を別の番号に変えてください' +
+              '（帰宅時間欄と重複し、履歴が上書きされます）');
+    }
     lines.push('');
   }
 
@@ -70,7 +79,8 @@ function runDiagnostics() {
   // --- 突き合わせ：マスターの今日の対象 vs 画面 ---
   if (master && check) {
     const want = getScheduledTasks_(new Date()).map(function (t) { return t.id; });
-    const have = Object.keys(readCheckState_(check));
+    // 帰宅時間の行はマスター由来ではないので、突き合わせの対象外
+    const have = Object.keys(readCheckState_(check)).filter(function (id) { return !isLeaveId_(id); });
     const missingOnCheck = want.filter(function (id) { return have.indexOf(id) < 0; });
     const extraOnCheck = have.filter(function (id) { return want.indexOf(id) < 0; });
     lines.push('■ マスターと画面の一致');

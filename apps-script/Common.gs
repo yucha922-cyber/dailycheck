@@ -189,6 +189,12 @@ function minToTimeStr_(n) {
   return ('0' + h).slice(-2) + ':' + ('0' + m).slice(-2);
 }
 
+/** 表示用に 'HH:mm' へ整える（時刻として読めなければ入力のまま） */
+function fmtTime_(v) {
+  const m = timeToMin_(v);
+  return m >= 0 ? minToTimeStr_(m) : timeStr_(v);
+}
+
 /** その月の日数 */
 function daysInMonth_(y, m) { return new Date(y, m + 1, 0).getDate(); }
 

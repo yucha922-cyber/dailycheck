@@ -113,6 +113,29 @@ const SETTING_DEFS = [
   { key: 'USE_DASHBOARD', label: 'ダッシュボードを使う',       def: false,       hint: 'TRUE にすると「ダッシュボード」タブを作成・更新します' },
 ];
 
+/**
+ * 「帰宅時間」欄。
+ *  業務（チェック項目）ではなく "院を出た時刻" の記録欄なので、
+ *  各業務マスターには置かず、「今日のチェック」の最終行に固定で出します。
+ *   ・完了率の母数には入れません（100%達成時刻とは別物）
+ *   ・入力した時刻は履歴に残り、ダッシュボードの I列に反映されます
+ *   ・ID は予約番号です。各業務マスターでは使わないでください
+ *     （使われている場合は「🩺 動作チェック（診断）」が警告します）
+ */
+const LEAVE_ROW = {
+  id: '14',
+  name: '帰宅時間',
+  phase: '閉店前',
+  note: '院を出た時刻を「完了時刻」の欄に入力してください（例 20:30）。\n' +
+        'ダッシュボードの「帰宅時間」列（I列）に自動で反映されます。\n' +
+        '※ この行は業務ではないため、完了率には含まれません。',
+};
+
+/** その業務IDが「帰宅時間」欄のものか */
+function isLeaveId_(id) {
+  return String(id == null ? '' : id).trim() === LEAVE_ROW.id;
+}
+
 /** 区分の並び順・色 */
 const PHASE_ORDER = ['開店前', '営業中', '閉店前'];
 const PHASE_COLOR = {
@@ -343,6 +366,12 @@ function minToTimeStr_(n) {
   if (n === null || n === undefined || n < 0) return '';
   const h = Math.floor(n / 60), m = Math.round(n % 60);
   return ('0' + h).slice(-2) + ':' + ('0' + m).slice(-2);
+}
+
+/** 表示用に 'HH:mm' へ整える（時刻として読めなければ入力のまま） */
+function fmtTime_(v) {
+  const m = timeToMin_(v);
+  return m >= 0 ? minToTimeStr_(m) : timeStr_(v);
 }
 
 /** その月の日数 */
@@ -930,19 +959,29 @@ function getDailyStats_(date) {
 function statsFromLogs_(date, logs) {
   logs = logs || [];
   const doneMap = {}, timeMap = {};
-  logs.forEach(function (l) { doneMap[l.taskId] = l.done; timeMap[l.taskId] = l.time; });
+  let leaveAt = '';
+  logs.forEach(function (l) {
+    // 帰宅時間は業務ではないので、完了率の計算からは外す
+    if (isLeaveId_(l.taskId)) { leaveAt = fmtTime_(l.time); return; }
+    doneMap[l.taskId] = l.done;
+    timeMap[l.taskId] = l.time;
+  });
 
   // 当日 …… 母数は「今日やるべき業務」。まだ触っていない業務も未完了として数える
   // 過去日 …… 確定済みの履歴をそのまま使う
   let base;
   if (String(date) === todayStr_()) {
-    base = getScheduledTasks_(parseDate_(date)).map(function (t) {
-      return { id: t.id, name: t.name, phase: t.phase, min: t.min, done: doneMap[t.id] === true };
-    });
+    base = getScheduledTasks_(parseDate_(date))
+      .filter(function (t) { return !isLeaveId_(t.id); })
+      .map(function (t) {
+        return { id: t.id, name: t.name, phase: t.phase, min: t.min, done: doneMap[t.id] === true };
+      });
   } else {
-    base = logs.map(function (l) {
-      return { id: l.taskId, name: l.name, phase: l.phase, min: l.min, done: l.done };
-    });
+    base = logs
+      .filter(function (l) { return !isLeaveId_(l.taskId); })
+      .map(function (l) {
+        return { id: l.taskId, name: l.name, phase: l.phase, min: l.min, done: l.done };
+      });
   }
 
   const byPhase = {};
@@ -976,6 +1015,8 @@ function statsFromLogs_(date, logs) {
     // 全業務が完了した日だけ、その達成時刻を 'HH:mm' で返す（時刻未記録なら空）
     doneAt: full && lastMin >= 0 ? minToTimeStr_(lastMin) : '',
     isFull: full,
+    // 院を出た時刻（「今日のチェック」の帰宅時間欄。未入力なら空）
+    leaveAt: leaveAt,
   };
 }
 
@@ -1079,13 +1120,20 @@ function buildChecklist_(targetDate) {
     const notes = tasks.map(function (t) { return [t.memo ? String(t.memo) : '']; });
     sh.getRange(CHK_DATA_START, CHK.NAME, tasks.length, 1).setNotes(notes);
     sh.getRange(CHK_DATA_START, CHK.NAME, tasks.length, 1).setFontWeight('bold');
-    applyPhaseColors_(sh, CHK_DATA_START, CHK.PHASE, CHK.PHASE);
-    sh.getRange(CHK_DATA_START, CHK.TIME, tasks.length, 1).setHorizontalAlignment('center');
   } else {
     sh.getRange(CHK_DATA_START, 1, 1, CHK_COLS).merge()
       .setValue('今日やる業務がありません。「' + SHEET_DEFS.MASTER.canonical +
                 '」の「頻度」と「有効」を確認してください。')
       .setFontColor('#d93025');
+  }
+
+  // --- 帰宅時間（業務ではなく記録欄。完了率の母数には入れません） ---
+  const leaveRow = CHK_DATA_START + (tasks.length || 1);
+  writeLeaveRow_(sh, leaveRow, carry[LEAVE_ROW.id] || {});
+
+  if (tasks.length) {
+    applyPhaseColors_(sh, CHK_DATA_START, CHK.PHASE, CHK.PHASE);
+    sh.getRange(CHK_DATA_START, CHK.TIME, tasks.length, 1).setHorizontalAlignment('center');
   }
 
   // --- 見た目 ---
@@ -1101,6 +1149,49 @@ function buildChecklist_(targetDate) {
 
   updateChecklistStatus_(sh);
   return sh;
+}
+
+/**
+ * 「帰宅時間」の行を書く。
+ * チェックボックスは付けず、「完了時刻」の欄に院を出た時刻を入力してもらいます。
+ * @param {Sheet} sh
+ * @param {number} row 書き込む行
+ * @param {Object} state 前回の入力 {time, staff, memo}
+ */
+function writeLeaveRow_(sh, row, state) {
+  state = state || {};
+  sh.getRange(row, 1, 1, CHK_COLS).setValues([[
+    '', LEAVE_ROW.id, LEAVE_ROW.phase, LEAVE_ROW.name, '',
+    state.time || '', state.staff || '', state.memo || '',
+  ]]);
+
+  sh.getRange(row, 1, 1, CHK_COLS).setBackground('#fff8e1');
+  sh.getRange(row, CHK.DONE).setBackground('#eceff1');           // ✓は付けない欄
+  sh.getRange(row, CHK.NAME).setFontWeight('bold').setNote(LEAVE_ROW.note);
+  sh.getRange(row, CHK.TIME)
+    .setHorizontalAlignment('center').setFontWeight('bold')
+    .setNote('院を出た時刻（例 20:30）');
+  return row;
+}
+
+/**
+ * 「今日のチェック」の1行 → 履歴レコード。
+ * 帰宅時間の行は業務ではないので、時刻が入っていれば「記録あり」として残します。
+ */
+function checkRowToRecord_(r) {
+  const id = String(r[CHK.ID - 1] || '').trim();
+  if (!id) return null;
+  const time = timeStr_(r[CHK.TIME - 1]);
+  return {
+    taskId: id,
+    name: String(r[CHK.NAME - 1] || '').replace(/^★\s*/, ''),
+    phase: r[CHK.PHASE - 1],
+    done: isLeaveId_(id) ? !!time : r[CHK.DONE - 1] === true,
+    time: time,
+    staff: r[CHK.STAFF - 1] || '',
+    memo: r[CHK.MEMO - 1] || '',
+    min: isLeaveId_(id) ? 0 : toMinutes_(r[CHK.MIN - 1]),
+  };
 }
 
 /** メニュー・トリガーから呼ぶ「今日の分に更新」 */
@@ -1148,18 +1239,8 @@ function checkRowsToRecords_(sh) {
   const vals = sh.getRange(CHK_DATA_START, 1, last - CHK_DATA_START + 1, CHK_COLS).getValues();
   const out = [];
   vals.forEach(function (r) {
-    const id = String(r[CHK.ID - 1] || '').trim();
-    if (!id) return;
-    out.push({
-      taskId: id,
-      name: String(r[CHK.NAME - 1] || '').replace(/^★\s*/, ''),
-      phase: r[CHK.PHASE - 1],
-      done: r[CHK.DONE - 1] === true,
-      time: timeStr_(r[CHK.TIME - 1]),
-      staff: r[CHK.STAFF - 1] || '',
-      memo: r[CHK.MEMO - 1] || '',
-      min: toMinutes_(r[CHK.MIN - 1]),
-    });
+    const rec = checkRowToRecord_(r);
+    if (rec) out.push(rec);
   });
   return out;
 }
@@ -1171,11 +1252,16 @@ function updateChecklistStatus_(sh) {
   const c = cfg_();
   const last = sh.getLastRow();
   const n = Math.max(last - CHK_DATA_START + 1, 0);
-  let done = 0, total = 0;
+  let done = 0, total = 0, leaveAt = '';
   if (n > 0) {
-    const vals = sh.getRange(CHK_DATA_START, 1, n, CHK.ID).getValues();
+    const vals = sh.getRange(CHK_DATA_START, 1, n, CHK_COLS).getValues();
     vals.forEach(function (r) {
-      if (!String(r[CHK.ID - 1] || '').trim()) return;
+      const id = String(r[CHK.ID - 1] || '').trim();
+      if (!id) return;
+      if (isLeaveId_(id)) {                       // 帰宅時間は業務ではないので数えない
+        leaveAt = fmtTime_(r[CHK.TIME - 1]);
+        return;
+      }
       total++;
       if (r[CHK.DONE - 1] === true) done++;
     });
@@ -1183,7 +1269,8 @@ function updateChecklistStatus_(sh) {
   const pct = total ? Math.round((done / total) * 100) : 0;
   const cell = sh.getRange(2, 1);
   cell.setValue('営業時間 ' + c.OPEN_TIME + '〜' + c.CLOSE_TIME +
-                '　／　完了 ' + done + ' / ' + total + '（' + pct + '%）　' + bar_(pct));
+                '　／　完了 ' + done + ' / ' + total + '（' + pct + '%）　' + bar_(pct) +
+                (leaveAt ? '　／　帰宅 ' + leaveAt : ''));
   cell.setFontColor(pct >= 100 ? '#1e8e3e' : (pct >= 70 ? '#f9ab00' : '#546e7a'))
       .setFontWeight(pct >= 100 ? 'bold' : 'normal');
 }
@@ -1246,8 +1333,10 @@ function handleEdit_(e) {
     let timeChanged = false;
     for (let i = 0; i < n; i++) {
       const cur = timeStr_(vals[i][CHK.TIME - 1]);
+      const rowId = String(vals[i][CHK.ID - 1] || '').trim();
       let next = cur;
-      if (String(vals[i][CHK.ID - 1] || '').trim()) {
+      // 帰宅時間の行は ✓ で動かさない（手入力した時刻を消さない）
+      if (rowId && !isLeaveId_(rowId)) {
         if (vals[i][CHK.DONE - 1] === true && !cur) next = nowTimeStr_();
         else if (vals[i][CHK.DONE - 1] !== true) next = '';
       }
@@ -1261,18 +1350,8 @@ function handleEdit_(e) {
   // 履歴へ反映
   const records = [];
   for (let i = 0; i < n; i++) {
-    const id = String(vals[i][CHK.ID - 1] || '').trim();
-    if (!id) continue;
-    records.push({
-      taskId: id,
-      name: String(vals[i][CHK.NAME - 1] || '').replace(/^★\s*/, ''),
-      phase: vals[i][CHK.PHASE - 1],
-      done: vals[i][CHK.DONE - 1] === true,
-      time: timeStr_(vals[i][CHK.TIME - 1]),
-      staff: vals[i][CHK.STAFF - 1] || '',
-      memo: vals[i][CHK.MEMO - 1] || '',
-      min: toMinutes_(vals[i][CHK.MIN - 1]),
-    });
+    const rec = checkRowToRecord_(vals[i]);
+    if (rec) records.push(rec);
   }
   if (records.length) writeHistoryRows_(date, records);
   updateChecklistStatus_(sh);
@@ -1337,7 +1416,7 @@ function bar_(pct) {
  * ============================================================
  */
 
-const DASH_COLS = 8;    // A〜H（H列＝100%達成時刻）
+const DASH_COLS = 9;    // A〜I（H列＝100%達成時刻／I列＝帰宅時間）
 
 function buildDashboard_() {
   const c = cfg_();
@@ -1356,11 +1435,12 @@ function buildDashboard_() {
   sh.setColumnWidth(1, 20);
   sh.setColumnWidths(2, 6, 110);
   sh.setColumnWidth(8, 110);          // H列（100%達成時刻）
+  sh.setColumnWidth(9, 110);          // I列（帰宅時間）
 
-  sh.getRange(2, 2, 1, 7).merge()
+  sh.getRange(2, 2, 1, 8).merge()
     .setValue('📊 ' + c.STORE_NAME + '　業務ダッシュボード')
     .setFontSize(16).setFontWeight('bold').setFontColor('#263238');
-  sh.getRange(3, 2, 1, 7).merge()
+  sh.getRange(3, 2, 1, 8).merge()
     .setValue('更新：' + todayLabel_() + ' ' + nowTimeStr_() +
               '　／　営業時間 ' + c.OPEN_TIME + '〜' + c.CLOSE_TIME)
     .setFontColor('#78909c');
@@ -1390,7 +1470,7 @@ function buildDashboard_() {
 
   // --- 想定作業時間 vs 目標 ---
   const est = estimateMinutes_();
-  sh.getRange(10, 2, 1, 7).merge().setValue('⏱ 想定作業時間（施術以外）')
+  sh.getRange(10, 2, 1, 8).merge().setValue('⏱ 想定作業時間（施術以外）')
     .setFontWeight('bold').setFontColor('#546e7a');
   sh.getRange(11, 2, 1, 4).setValues([['区分', '想定(分)', '目標(分)', '判定']])
     .setFontWeight('bold').setBackground('#eceff1');
@@ -1399,7 +1479,7 @@ function buildDashboard_() {
     sh.getRange(12 + i, 2, 1, 4).setValues([[row[0], row[1], c.BUFFER_MIN, ok ? '✅ OK' : '⚠️ 超過']]);
     sh.getRange(12 + i, 5).setFontColor(ok ? '#1e8e3e' : '#d93025');
   });
-  sh.getRange(14, 2, 1, 7).merge()
+  sh.getRange(14, 2, 1, 8).merge()
     .setValue('※「営業中」は施術と並行のため対象外。開店前・閉店前を目標時間内に収めるのが狙いです。')
     .setFontColor('#90a4ae').setFontSize(9);
 
@@ -1416,10 +1496,10 @@ function buildDashboard_() {
 
   // --- 1ヶ月間（当月分すべて）の推移 ---
   const month = new Date();
-  sh.getRange(16, 5, 1, 4).merge()
+  sh.getRange(16, 5, 1, 5).merge()
     .setValue('📈 ' + monthLabel_(month) + 'の完了率（1ヶ月間）')
     .setFontWeight('bold').setFontColor('#546e7a');
-  sh.getRange(17, 5, 1, 4).setValues([['日付', '完了率', '推移', '100%達成時刻']])
+  sh.getRange(17, 5, 1, 5).setValues([['日付', '完了率', '推移', '100%達成時刻', '帰宅時間']])
     .setFontWeight('bold').setBackground('#eceff1').setFontColor('#546e7a');
 
   const trend = getMonthTrend_(month);
@@ -1433,6 +1513,10 @@ function buildDashboard_() {
     // H列：その日 100% に達した時刻（未達成・データ無しは「―」）
     sh.getRange(TREND_START, 8, trend.length, 1)
       .setValues(trend.map(function (t) { return [fullTimeCell_(t)]; }))
+      .setHorizontalAlignment('center');
+    // I列：「今日のチェック」の帰宅時間欄に入力された、院を出た時刻
+    sh.getRange(TREND_START, 9, trend.length, 1)
+      .setValues(trend.map(function (t) { return [t.leaveAt || '―']; }))
       .setHorizontalAlignment('center');
   }
 
@@ -1490,6 +1574,7 @@ function getMonthTrend_(base) {
       pct: st.pct,
       has: logs.length > 0,
       doneAt: st.doneAt,
+      leaveAt: st.leaveAt,
     });
   }
   return out;
@@ -1615,6 +1700,15 @@ function runDiagnostics() {
     lines.push('　今日の対象：' + todays.length + '件');
     if (!tasks.length) ng.push('マスターから業務を読み取れません（「業務名」の列見出しを確認）');
     if (tasks.length && !todays.length) ng.push('今日の対象が0件です（「頻度」「有効」を確認）');
+
+    // 「帰宅時間」欄の予約IDがマスターで使われていないか
+    const clash = tasks.filter(function (t) { return isLeaveId_(t.id); });
+    if (clash.length) {
+      lines.push('　⚠ ID「' + LEAVE_ROW.id + '」は帰宅時間欄の予約IDです（' +
+                 clash.map(function (t) { return t.name; }).join('、') + '）');
+      ng.push('各業務マスターの ID「' + LEAVE_ROW.id + '」を別の番号に変えてください' +
+              '（帰宅時間欄と重複し、履歴が上書きされます）');
+    }
     lines.push('');
   }
 
@@ -1633,7 +1727,8 @@ function runDiagnostics() {
   // --- 突き合わせ：マスターの今日の対象 vs 画面 ---
   if (master && check) {
     const want = getScheduledTasks_(new Date()).map(function (t) { return t.id; });
-    const have = Object.keys(readCheckState_(check));
+    // 帰宅時間の行はマスター由来ではないので、突き合わせの対象外
+    const have = Object.keys(readCheckState_(check)).filter(function (id) { return !isLeaveId_(id); });
     const missingOnCheck = want.filter(function (id) { return have.indexOf(id) < 0; });
     const extraOnCheck = have.filter(function (id) { return want.indexOf(id) < 0; });
     lines.push('■ マスターと画面の一致');

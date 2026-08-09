@@ -164,19 +164,29 @@ function getDailyStats_(date) {
 function statsFromLogs_(date, logs) {
   logs = logs || [];
   const doneMap = {}, timeMap = {};
-  logs.forEach(function (l) { doneMap[l.taskId] = l.done; timeMap[l.taskId] = l.time; });
+  let leaveAt = '';
+  logs.forEach(function (l) {
+    // 帰宅時間は業務ではないので、完了率の計算からは外す
+    if (isLeaveId_(l.taskId)) { leaveAt = fmtTime_(l.time); return; }
+    doneMap[l.taskId] = l.done;
+    timeMap[l.taskId] = l.time;
+  });
 
   // 当日 …… 母数は「今日やるべき業務」。まだ触っていない業務も未完了として数える
   // 過去日 …… 確定済みの履歴をそのまま使う
   let base;
   if (String(date) === todayStr_()) {
-    base = getScheduledTasks_(parseDate_(date)).map(function (t) {
-      return { id: t.id, name: t.name, phase: t.phase, min: t.min, done: doneMap[t.id] === true };
-    });
+    base = getScheduledTasks_(parseDate_(date))
+      .filter(function (t) { return !isLeaveId_(t.id); })
+      .map(function (t) {
+        return { id: t.id, name: t.name, phase: t.phase, min: t.min, done: doneMap[t.id] === true };
+      });
   } else {
-    base = logs.map(function (l) {
-      return { id: l.taskId, name: l.name, phase: l.phase, min: l.min, done: l.done };
-    });
+    base = logs
+      .filter(function (l) { return !isLeaveId_(l.taskId); })
+      .map(function (l) {
+        return { id: l.taskId, name: l.name, phase: l.phase, min: l.min, done: l.done };
+      });
   }
 
   const byPhase = {};
@@ -210,5 +220,7 @@ function statsFromLogs_(date, logs) {
     // 全業務が完了した日だけ、その達成時刻を 'HH:mm' で返す（時刻未記録なら空）
     doneAt: full && lastMin >= 0 ? minToTimeStr_(lastMin) : '',
     isFull: full,
+    // 院を出た時刻（「今日のチェック」の帰宅時間欄。未入力なら空）
+    leaveAt: leaveAt,
   };
 }
