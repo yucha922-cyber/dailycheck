@@ -287,7 +287,134 @@ ok(hCol.length === trend.length && hCol.every(v => v !== ''), 'H列が日数ぶ�
 if (past) ok(hCol[0] === '20:15', 'H列の1日目が 20:15', hCol[0]);
 ok(String(dash.getRange(18, 5).getValue()) === trend[0].label, 'データは18行目から（1日）', dash.getRange(18, 5).getValue());
 
-/* ---------- 9. 帰宅時間の欄 ---------- */
+/* ---------- 9. 先月との比較（月次アーカイブ） ---------- */
+section('ダッシュボード下部：先月と今月を並べた比較表');
+const s9 = ['各業務マスター', '今日のチェック', '履歴', '設定'].map(n => new mock.FakeSheet(n));
+mock.SpreadsheetApp._ss = new mock.FakeSpreadsheet(s9);
+ctx.clearCfgCache_();
+ctx.setupAll();
+
+const now9 = new Date();
+const prevM = new Date(now9.getFullYear(), now9.getMonth() - 1, 1);
+const prevDays = new Date(prevM.getFullYear(), prevM.getMonth() + 1, 0).getDate();
+const prevDay = n => ctx.dateStr_(new Date(prevM.getFullYear(), prevM.getMonth(), n));
+
+// 先月：1日＝100%（20:10 に達成・帰宅 20:30）／2日＝50%／末日＝100%
+ctx.writeHistoryRows_(prevDay(1), [
+  { taskId: 'T1', name: '清掃', phase: '開店前', done: true, time: '10:00', min: 10 },
+  { taskId: 'T2', name: '売上確認', phase: '閉店前', done: true, time: '20:10', min: 5 },
+  { taskId: '14', name: '帰宅時間', phase: '閉店前', done: false, time: '20:30', min: 0 },
+]);
+ctx.writeHistoryRows_(prevDay(2), [
+  { taskId: 'T1', name: '清掃', phase: '開店前', done: true, time: '10:05', min: 10 },
+  { taskId: 'T2', name: '売上確認', phase: '閉店前', done: false, time: '', min: 5 },
+  { taskId: '14', name: '帰宅時間', phase: '閉店前', done: false, time: '21:30', min: 0 },
+]);
+ctx.writeHistoryRows_(prevDay(prevDays), [
+  { taskId: 'T1', name: '清掃', phase: '開店前', done: true, time: '10:10', min: 10 },
+]);
+
+const prevTrend = ctx.getMonthTrend_(prevM);
+ok(prevTrend.length === prevDays, '過去の月は月末まで出る（' + prevDays + '日）', prevTrend.length);
+ok(prevTrend[0].pct === 100 && prevTrend[0].doneAt === '20:10', '先月1日は 100%（20:10 達成）', prevTrend[0]);
+ok(prevTrend[1].pct === 50, '先月2日は 50%', prevTrend[1].pct);
+ok(prevTrend[2].has === false, '記録の無い日は has=false', prevTrend[2].has);
+
+const sum9 = ctx.monthSummary_(prevTrend);
+ok(sum9.days === 3, '記録のあった日数だけ数える（3日）', sum9.days);
+ok(sum9.avgPct === 83, '平均完了率は記録のある日だけの平均（(100+50+100)/3＝83%）', sum9.avgPct);
+ok(sum9.fullDays === 2, '100%達成は2日', sum9.fullDays);
+ok(sum9.avgLeave === '21:00', '平均帰宅時間は 20:30 と 21:30 の平均', sum9.avgLeave);
+ok(ctx.monthSummary_([]).days === 0 && ctx.monthSummaryText_(ctx.monthSummary_([])) === '記録なし',
+   '記録が1件も無い月は「記録なし」');
+ok(ctx.monthSummaryText_({ days: 5, avgPct: 90, fullDays: 4, avgLeave: '20:00' }, { days: 5, avgPct: 80 })
+     .indexOf('前月比 +10pt') >= 0, '前月比が出る（+10pt）');
+ok(ctx.monthSummaryText_({ days: 5, avgPct: 70, fullDays: 4, avgLeave: '20:00' }, { days: 5, avgPct: 80 })
+     .indexOf('前月比 -10pt') >= 0, '悪化したときは「-10pt」');
+
+// 比較する月の並び（古い月 → 今月）
+const months9 = ctx.archiveMonths_(1);
+ok(months9.length === 2, '既定は先月と今月の2ヶ月', months9.length);
+ok(months9[0].getMonth() === prevM.getMonth() && months9[0].getFullYear() === prevM.getFullYear(),
+   '1つめが先月（年をまたいでも正しい）', ctx.dateStr_(months9[0]));
+ok(months9[1].getMonth() === now9.getMonth(), '2つめが今月', ctx.dateStr_(months9[1]));
+ok(ctx.archiveCol_(0) === 2 && ctx.archiveCol_(1) === 8, '先月＝B列から／今月＝H列から',
+   [ctx.archiveCol_(0), ctx.archiveCol_(1)]);
+
+ctx.buildDashboard_();
+const dash9 = mock.SpreadsheetApp._ss.getSheetByName('ダッシュボード');
+
+// 比較表の位置：30行目以降で、上の「今月の推移」や未完了リストと重ならない
+let top9 = 0;
+for (let r = 1; r <= dash9.getLastRow(); r++) {
+  if (String(dash9.getRange(r, 2).getValue()).indexOf('月次アーカイブ') >= 0) { top9 = r; break; }
+}
+ok(top9 >= 30, '比較表は30行目以降から始まる（' + top9 + '行目）', top9);
+const trendBottom = 18 + now9.getDate() - 1;
+ok(top9 > trendBottom, '上の「今月の推移」と重ならない', [top9, trendBottom]);
+
+const HEAD9 = top9 + 4, TOP9 = top9 + 5;
+ok(String(dash9.getRange(top9 + 2, 2).getValue()) === ctx.monthLabel_(prevM) + '（先月）',
+   '左の見出しが「◯年◯月（先月）」', dash9.getRange(top9 + 2, 2).getValue());
+ok(String(dash9.getRange(top9 + 2, 8).getValue()) === ctx.monthLabel_(now9) + '（今月）',
+   '右の見出しが「◯年◯月（今月）」', dash9.getRange(top9 + 2, 8).getValue());
+ok(String(dash9.getRange(top9 + 3, 2).getValue()).indexOf('平均完了率 83%') >= 0,
+   '先月のまとめに平均完了率が出る', dash9.getRange(top9 + 3, 2).getValue());
+ok(String(dash9.getRange(HEAD9, 2).getValue()) === '日付' &&
+   String(dash9.getRange(HEAD9, 5).getValue()) === '100%達成時刻' &&
+   String(dash9.getRange(HEAD9, 6).getValue()) === '帰宅時間', '左（先月）の見出しは B〜F 列');
+ok(String(dash9.getRange(HEAD9, 8).getValue()) === '日付' &&
+   String(dash9.getRange(HEAD9, 11).getValue()) === '100%達成時刻' &&
+   String(dash9.getRange(HEAD9, 12).getValue()) === '帰宅時間', '右（今月）の見出しは H〜L 列');
+
+ok(String(dash9.getRange(TOP9, 2).getValue()) === prevTrend[0].label, '先月1日から並ぶ', dash9.getRange(TOP9, 2).getValue());
+ok(String(dash9.getRange(TOP9, 3).getValue()) === '100%', '先月1日の完了率', dash9.getRange(TOP9, 3).getValue());
+ok(String(dash9.getRange(TOP9, 5).getValue()) === '20:10', '先月1日の100%達成時刻', dash9.getRange(TOP9, 5).getValue());
+ok(String(dash9.getRange(TOP9, 6).getValue()) === '20:30', '先月1日の帰宅時間', dash9.getRange(TOP9, 6).getValue());
+ok(String(dash9.getRange(TOP9 + 1, 3).getValue()) === '50%', '先月2日の完了率', dash9.getRange(TOP9 + 1, 3).getValue());
+ok(String(dash9.getRange(TOP9 + 2, 3).getValue()) === '―', '記録の無い日は「―」', dash9.getRange(TOP9 + 2, 3).getValue());
+ok(String(dash9.getRange(TOP9 + prevDays - 1, 2).getValue()) === prevTrend[prevDays - 1].label,
+   '先月は月末日まで並ぶ', dash9.getRange(TOP9 + prevDays - 1, 2).getValue());
+ok(String(dash9.getRange(TOP9 + prevDays, 2).getValue()) === '', '月末より下には書かない');
+ok(String(dash9.getRange(TOP9 + now9.getDate() - 1, 8).getValue()).indexOf('/') >= 0,
+   '右（今月）は今日の行まで並ぶ', dash9.getRange(TOP9 + now9.getDate() - 1, 8).getValue());
+
+// 記録の無い月は31行ぶん並べず、1行で知らせる
+const s9b = ['各業務マスター', '今日のチェック', '履歴', '設定'].map(n => new mock.FakeSheet(n));
+mock.SpreadsheetApp._ss = new mock.FakeSpreadsheet(s9b);
+ctx.clearCfgCache_();
+ctx.setupAll();
+ctx.buildDashboard_();
+const dash9b = mock.SpreadsheetApp._ss.getSheetByName('ダッシュボード');
+let top9b = 0;
+for (let r = 1; r <= dash9b.getLastRow(); r++) {
+  if (String(dash9b.getRange(r, 2).getValue()).indexOf('月次アーカイブ') >= 0) { top9b = r; break; }
+}
+ok(String(dash9b.getRange(top9b + 3, 2).getValue()) === '記録なし', '記録の無い先月は「記録なし」',
+   dash9b.getRange(top9b + 3, 2).getValue());
+ok(String(dash9b.getRange(top9b + 5, 2).getValue()) === 'この月の記録はありません',
+   '日付を並べず1行で知らせる', dash9b.getRange(top9b + 5, 2).getValue());
+
+// 「比較表示する過去の月数」＝0 なら比較表を出さない
+const settings9 = mock.SpreadsheetApp._ss.getSheetByName('設定');
+for (let r = 1; r <= settings9.getLastRow(); r++) {
+  if (String(settings9.getRange(r, 1).getValue()).indexOf('比較表示する過去の月数') >= 0) {
+    settings9.getRange(r, 2).setValue(0);
+  }
+}
+ctx.clearCfgCache_();
+ok(ctx.cfg_().COMPARE_MONTHS === 0, '設定タブから比較月数を変えられる', ctx.cfg_().COMPARE_MONTHS);
+ctx.buildDashboard_();
+const dash9c = mock.SpreadsheetApp._ss.getSheetByName('ダッシュボード');
+let found9c = false;
+for (let r = 1; r <= dash9c.getLastRow(); r++) {
+  if (String(dash9c.getRange(r, 2).getValue()).indexOf('月次アーカイブ') >= 0) found9c = true;
+}
+ok(!found9c, '0 にすると比較表が出ない');
+ctx.clearCfgCache_();
+
+
+/* ---------- 10. 帰宅時間の欄 ---------- */
 section('今日のチェックの「帰宅時間」欄（ID 14）');
 const s6 = ['各業務マスター', '今日のチェック', '履歴', '設定'].map(n => new mock.FakeSheet(n));
 mock.SpreadsheetApp._ss = new mock.FakeSpreadsheet(s6);

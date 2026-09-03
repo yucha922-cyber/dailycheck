@@ -96,6 +96,7 @@ const SETTING_DEFS = [
   { key: 'MORNING_HOUR',  label: '朝の自動リセット時刻(時)',   def: 6,           hint: '0〜23。前日を確定して当日分を用意する時刻' },
   { key: 'NIGHT_HOUR',    label: '夜の自動確定時刻(時)',       def: 20,          hint: '0〜23。その日を締めて履歴に保存する時刻' },
   { key: 'USE_DASHBOARD', label: 'ダッシュボードを使う',       def: false,       hint: 'TRUE にすると「ダッシュボード」タブを作成・更新します' },
+  { key: 'COMPARE_MONTHS', label: '比較表示する過去の月数',    def: 1,           hint: '0〜6。1 なら「先月と今月」をダッシュボード下部に並べて比較します' },
 ];
 
 /**
