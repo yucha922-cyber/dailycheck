@@ -51,6 +51,14 @@ class FakeSheet {
     this.checkboxCells = {};
     return this;
   }
+  insertRowsAfter(after, n) {
+    this.maxRows += n;
+    for (let i = 0; i < n; i++) {
+      this.grid.push(new Array(this.maxCols).fill(''));
+      this.notes.push(new Array(this.maxCols).fill(''));
+    }
+    return this;
+  }
   insertColumnsAfter(after, n) {
     this.maxCols += n;
     for (let r = 0; r < this.maxRows; r++) {
